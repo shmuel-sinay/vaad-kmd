@@ -5,7 +5,7 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import webpush from 'npm:web-push@3';
 
-const SITE_URL = Deno.env.get('SITE_URL') ?? 'https://fascinating-shortbread-8271fa.netlify.app/';
+const SITE_URL = Deno.env.get('SITE_URL') ?? 'https://vaad-kmd.netlify.app/';
 
 Deno.serve(async () => {
   const db = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!, {

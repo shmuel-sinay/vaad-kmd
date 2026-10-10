@@ -91,7 +91,7 @@
 1. ב-GitHub: **Settings ← General ← Default branch**. מגדירים את `main` כענף ברירת המחדל.
 2. ב-GitHub: **Settings ← Pages ← Source: GitHub Actions**.
 3. כל עדכון שנכנס לענף `main` מעלה את האתר אוטומטית. אפשר גם להפעיל ידנית: **Actions ← Deploy to GitHub Pages ← Run workflow**.
-4. כתובת האתר: https://fascinating-shortbread-8271fa.netlify.app/
+4. כתובת האתר: https://vaad-kmd.netlify.app/
 
 ### 6. כניסה ראשונה
 נכנסים לאתר ונרשמים. **המשתמש הראשון הופך למנהל.** אחר כך שולחים את הקישור לחברי הקהילה, ומאשרים אותם בדף **⚙️ ניהול**. יש שם גם כפתור "אישור כולם", ואפשר גם להדביק מראש רשימת מיילים בלשונית **אישור מראש**.
