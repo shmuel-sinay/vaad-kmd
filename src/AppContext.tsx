@@ -1,0 +1,303 @@
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import type { Session } from '@supabase/supabase-js';
+import { supabase } from './supabase';
+import { joinShared, subscribe } from './lib/realtime';
+import { notify } from './lib/notify';
+import type { Conversation, DmMessage, Message, Profile, Room } from './types';
+
+interface AppState {
+  session: Session | null;
+  loading: boolean;
+  me: Profile | null;
+  profiles: Map<string, Profile>;
+  rooms: Room[];
+  /** Set (to the server's error text) when the database is older than this app. */
+  schemaOutdated: string | null;
+  mainRoom: Room | undefined;
+  conversations: Conversation[];
+  online: Set<string>;
+  isMod: boolean;
+  isAdmin: boolean;
+  /** Admins, moderators and inspectors: may delete any room message, wall post or file. */
+  canRemove: boolean;
+  /** The owner ("מנהל-על"): the only one who sees anonymous authors and all private chats. */
+  isOwner: boolean;
+  ownerId: string | null;
+  /** Set while I am muted: until when and why (never who). */
+  myMute: { until: string; reason: string | null } | null;
+  /** Rooms I muted for myself (moved down in the sidebar, no unread count). */
+  mutedRooms: Set<number>;
+  toggleRoomMute: (roomId: number) => Promise<void>;
+  /** While an admin keeps guest view open: until when visitors may read without logging in. */
+  guestUntil: string | null;
+  /** Not logged in and reading through the temporary guest view. */
+  isGuest: boolean;
+  recovering: boolean;
+  endRecovery: () => void;
+  nameOf: (id: string | null | undefined) => string;
+  reloadMe: () => Promise<void>;
+  reloadProfiles: () => Promise<void>;
+  reloadRooms: () => Promise<void>;
+  reloadConversations: () => Promise<void>;
+}
+
+export const AppCtx = createContext<AppState | null>(null);
+
+export function useApp(): AppState {
+  const v = useContext(AppCtx);
+  if (!v) throw new Error('useApp outside AppProvider');
+  return v;
+}
+
+export function AppProvider({ children }: { children: ReactNode }) {
+  const [session, setSession] = useState<Session | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [me, setMe] = useState<Profile | null>(null);
+  const [profiles, setProfiles] = useState<Map<string, Profile>>(new Map());
+  const [rooms, setRooms] = useState<Room[]>([]);
+  const [schemaOutdated, setSchemaOutdated] = useState<string | null>(null);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [online, setOnline] = useState<Set<string>>(new Set());
+  const [recovering, setRecovering] = useState(false);
+  const [ownerId, setOwnerId] = useState<string | null>(null);
+  const [myMute, setMyMute] = useState<{ until: string; reason: string | null } | null>(null);
+  const [mutedRooms, setMutedRooms] = useState<Set<number>>(new Set());
+  const [guestUntil, setGuestUntil] = useState<string | null>(null);
+  const meRef = useRef<Profile | null>(null);
+  const convRef = useRef(conversations);
+  convRef.current = conversations;
+  const profilesRef = useRef(profiles);
+  meRef.current = me;
+  profilesRef.current = profiles;
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      if (!data.session) setLoading(false);
+    });
+    const { data: sub } = supabase.auth.onAuthStateChange((event, s) => {
+      if (event === 'PASSWORD_RECOVERY') setRecovering(true);
+      setSession(s);
+      if (!s) {
+        setMe(null);
+        setLoading(false);
+      }
+    });
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  const uid = session?.user.id;
+
+  const reloadMe = useCallback(async () => {
+    if (!uid) return;
+    const { data } = await supabase.from('profiles').select('*').eq('id', uid).maybeSingle();
+    setMe(data as Profile | null);
+    setLoading(false);
+  }, [uid]);
+
+  const reloadProfiles = useCallback(async () => {
+    supabase.rpc('owner_profile_id').then(({ data }) => setOwnerId((data as string | null) ?? null));
+    const { data } = await supabase.from('profiles').select('*').order('display_name');
+    if (data) setProfiles(new Map((data as Profile[]).map((p) => [p.id, p])));
+  }, []);
+
+  const reloadRooms = useCallback(async () => {
+    const { data, error } = await supabase.rpc('my_rooms');
+    // PGRST202 = function not found: the SQL update has not been applied (or the API cache is stale).
+    const outdated = error && (error.code === 'PGRST202' || /my_rooms/.test(error.message ?? ''));
+    setSchemaOutdated(outdated ? `${error.code ?? ''} ${error.message ?? ''}`.trim() : null);
+    if (data) setRooms(data as Room[]);
+  }, []);
+
+  const reloadConversations = useCallback(async () => {
+    const { data } = await supabase.rpc('my_conversations');
+    if (data) setConversations(data as Conversation[]);
+  }, []);
+
+  useEffect(() => {
+    if (!uid) return;
+    setLoading(true);
+    reloadMe();
+  }, [uid, reloadMe]);
+
+  const active = me?.status === 'active';
+
+  // Guest view: is the site open for reading without logging in? (re-checked every minute, it closes by itself)
+  const checkGuest = useCallback(async () => {
+    const { data } = await supabase.rpc('guest_view_until');
+    setGuestUntil((data as string | null) ?? null);
+  }, []);
+  useEffect(() => {
+    checkGuest();
+    const t = setInterval(checkGuest, 60000);
+    return () => clearInterval(t);
+  }, [checkGuest, uid]);
+  const isGuest = !uid && !!guestUntil;
+
+  const reloadGuestRooms = useCallback(async () => {
+    const { data } = await supabase.from('channels').select('id, name, description, is_main, admin_only_post, created_by, last_message_at, position')
+      .order('is_main', { ascending: false }).order('position').order('last_message_at', { ascending: false });
+    setRooms(((data as Room[] | null) ?? []).map((r) => ({ ...r, unread: 0, last_body: null, last_author: null, last_anonymous: null })));
+  }, []);
+
+  // Visitors: names and rooms, kept fresh while they read.
+  useEffect(() => {
+    if (!isGuest) return;
+    reloadProfiles();
+    reloadGuestRooms();
+    const unsub = subscribe('guest', (ch) =>
+      ch
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => reloadProfiles())
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'channels' }, () => reloadGuestRooms()),
+    );
+    return () => {
+      unsub();
+      setRooms([]);
+      setProfiles(new Map());
+    };
+  }, [isGuest, reloadProfiles, reloadGuestRooms]);
+
+  // Shared data once approved, kept fresh via realtime. Room list refreshes are debounced
+  // because every message in any room touches it.
+  useEffect(() => {
+    if (!active) return;
+    reloadProfiles();
+    reloadRooms();
+    reloadConversations();
+    // Today's Hebrew birthday greetings (idempotent; the email job posts them too).
+    supabase.rpc('post_birthdays').then(() => undefined);
+    let roomTimer: ReturnType<typeof setTimeout> | undefined;
+    const roomsSoon = () => {
+      clearTimeout(roomTimer);
+      roomTimer = setTimeout(reloadRooms, 600);
+    };
+    const unsub = subscribe('app', (ch) =>
+      ch
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, (p) => {
+          reloadProfiles();
+          reloadMe();
+          // Tell admins about members let in by their name on the roster.
+          const n = p.new as Partial<Profile>;
+          if (meRef.current?.role === 'admin' && n.id && n.joined_via === 'roster' && n.join_seen === false && n.status === 'active') {
+            notify(`${n.display_name} הצטרף לפי רשימת השמות`, 'נכנס אוטומטית. כדאי לוודא שזה באמת הוא.', () => (window.location.hash = '#/admin'));
+          }
+        })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'channels' }, roomsSoon)
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (p) => {
+          roomsSoon();
+          const m = p.new as Message;
+          const my = meRef.current;
+          if (my && m.author_id !== my.id && m.body.includes(`@${my.display_name}`)) {
+            const who = m.anonymous ? 'אנונימי' : profilesRef.current.get(m.author_id ?? '')?.display_name ?? 'מישהו';
+            notify(`${who} הזכיר אותך`, m.body);
+          }
+        })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'dm_messages' }, (p) => {
+          reloadConversations();
+          const m = p.new as DmMessage;
+          const my = meRef.current;
+          // The owner receives every DM event; notify only about his own conversations.
+          if (p.eventType === 'INSERT' && my && m.sender_id !== my.id && convRef.current.some((c) => c.id === m.conversation_id)) {
+            // sender_id null is either the anonymous other side or my own hidden self;
+            // the notification only fires while the tab is hidden, so a self-echo is harmless.
+            const who = m.sender_id ? profilesRef.current.get(m.sender_id)?.display_name ?? 'הודעה חדשה' : 'הודעה אנונימית';
+            notify(who, m.body, () => (window.location.hash = `#/dm/${m.conversation_id}`));
+          }
+        }),
+    );
+    return () => {
+      clearTimeout(roomTimer);
+      unsub();
+    };
+  }, [active, reloadProfiles, reloadRooms, reloadConversations, reloadMe]);
+
+  // Am I muted? (re-checked whenever my profile changes, e.g. a moderator muted or unmuted me)
+  useEffect(() => {
+    if (!active) return;
+    supabase.rpc('my_mute').then(({ data }) => {
+      const r = (Array.isArray(data) ? data[0] : data) as { until: string | null; reason: string | null } | null;
+      setMyMute(r?.until ? { until: r.until, reason: r.reason } : null);
+    });
+  }, [active, me?.muted_until]);
+
+  useEffect(() => {
+    if (!active || !uid) return;
+    supabase.from('room_mutes').select('channel_id').then(({ data }) => setMutedRooms(new Set(((data as { channel_id: number }[]) ?? []).map((x) => x.channel_id))));
+  }, [active, uid]);
+
+  const toggleRoomMute = useCallback(async (roomId: number) => {
+    if (!uid) return;
+    const muted = mutedRooms.has(roomId);
+    const { error } = muted
+      ? await supabase.from('room_mutes').delete().match({ user_id: uid, channel_id: roomId })
+      : await supabase.from('room_mutes').insert({ user_id: uid, channel_id: roomId });
+    if (error) return;
+    setMutedRooms((prev) => {
+      const next = new Set(prev);
+      if (muted) next.delete(roomId);
+      else next.add(roomId);
+      return next;
+    });
+  }, [uid, mutedRooms]);
+
+  // Scheduled messages are sent by the server every minute; the open site nudges it too.
+  useEffect(() => {
+    if (!active) return;
+    const t = setInterval(() => supabase.rpc('send_due_scheduled'), 60000);
+    return () => clearInterval(t);
+  }, [active]);
+
+  // While pending, poll so the user is let in as soon as an admin approves.
+  useEffect(() => {
+    if (!uid || me?.status !== 'pending') return;
+    const t = setInterval(reloadMe, 15000);
+    return () => clearInterval(t);
+  }, [uid, me?.status, reloadMe]);
+
+  // Presence: who is online anywhere on the site.
+  useEffect(() => {
+    if (!active || !uid) return;
+    return joinShared(
+      'online',
+      { config: { presence: { key: uid } } },
+      (ch) => ch.on('presence', { event: 'sync' }, () => setOnline(new Set(Object.keys(ch.presenceState())))),
+      (ch) => ch.track({ at: Date.now() }),
+    );
+  }, [active, uid]);
+
+  const nameOf = useCallback((id: string | null | undefined) => (id ? profiles.get(id)?.display_name ?? 'משתמש' : 'אנונימי'), [profiles]);
+
+  const value = useMemo<AppState>(
+    () => ({
+      session,
+      loading,
+      me,
+      profiles,
+      rooms,
+      schemaOutdated,
+      mainRoom: rooms.find((r) => r.is_main),
+      conversations,
+      online,
+      isMod: active && (me?.role === 'moderator' || me?.role === 'admin'),
+      isAdmin: active && me?.role === 'admin',
+      canRemove: active && (me?.role === 'inspector' || me?.role === 'moderator' || me?.role === 'admin'),
+      isOwner: active && !!me && me.id === ownerId,
+      ownerId,
+      myMute,
+      mutedRooms,
+      toggleRoomMute,
+      guestUntil,
+      isGuest,
+      recovering,
+      endRecovery: () => setRecovering(false),
+      nameOf,
+      reloadMe,
+      reloadProfiles,
+      reloadRooms,
+      reloadConversations,
+    }),
+    [session, loading, me, profiles, rooms, schemaOutdated, conversations, online, active, ownerId, myMute, mutedRooms, toggleRoomMute, guestUntil, isGuest, recovering, nameOf, reloadMe, reloadProfiles, reloadRooms, reloadConversations],
+  );
+
+  return <AppCtx.Provider value={value}>{children}</AppCtx.Provider>;
+}

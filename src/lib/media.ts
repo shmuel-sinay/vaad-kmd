@@ -1,0 +1,194 @@
+import { useEffect, useState } from 'react';
+import { supabase } from '../supabase';
+import type { Attachment } from '../types';
+
+const BUCKET = 'media';
+export const MAX_VIDEO_BYTES = 20 * 1024 * 1024;
+export const MAX_VIDEO_SECONDS = 90;
+const MAX_GIF_BYTES = 8 * 1024 * 1024;
+const IMAGE_MAX_SIDE = 1600;
+
+// ---------- Signed URLs (private bucket), batched and cached ----------
+const cache = new Map<string, { url: string; until: number }>();
+const waiting = new Map<string, ((url: string | null) => void)[]>();
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+async function flush() {
+  flushTimer = null;
+  const paths = [...waiting.keys()];
+  const callbacks = new Map(waiting);
+  waiting.clear();
+  const { data } = await supabase.storage.from(BUCKET).createSignedUrls(paths, 3600);
+  const byPath = new Map((data ?? []).map((d) => [d.path, d.signedUrl]));
+  for (const p of paths) {
+    const url = byPath.get(p) ?? null;
+    if (url) cache.set(p, { url, until: Date.now() + 50 * 60 * 1000 });
+    for (const cb of callbacks.get(p) ?? []) cb(url);
+  }
+}
+
+export function signedUrl(path: string): Promise<string | null> {
+  const hit = cache.get(path);
+  if (hit && hit.until > Date.now()) return Promise.resolve(hit.url);
+  return new Promise((resolve) => {
+    waiting.set(path, [...(waiting.get(path) ?? []), resolve]);
+    if (!flushTimer) flushTimer = setTimeout(flush, 30);
+  });
+}
+
+/** Signed URL for a stored file; null while loading or when missing. */
+export function useSignedUrl(path: string | null | undefined): string | null {
+  const [url, setUrl] = useState<string | null>(() => {
+    const hit = path ? cache.get(path) : undefined;
+    return hit && hit.until > Date.now() ? hit.url : null;
+  });
+  useEffect(() => {
+    let alive = true;
+    if (!path) {
+      setUrl(null);
+      return;
+    }
+    signedUrl(path).then((u) => alive && setUrl(u));
+    return () => {
+      alive = false;
+    };
+  }, [path]);
+  return url;
+}
+
+/** Physically removes a stored file (allowed for admins/moderators). Best effort. */
+export async function removeFile(path: string): Promise<void> {
+  cache.delete(path);
+  await supabase.storage.from(BUCKET).remove([path]);
+}
+
+// ---------- Uploads ----------
+function loadImage(file: Blob): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('לא הצלחנו לקרוא את התמונה'));
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+function toJpeg(canvas: HTMLCanvasElement, quality: number): Promise<Blob> {
+  return new Promise((resolve, reject) =>
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('שגיאה בעיבוד התמונה'))), 'image/jpeg', quality),
+  );
+}
+
+/** Resizes a photo to at most 1600px and re-encodes it, which also drops location metadata. */
+async function shrinkImage(file: File): Promise<{ blob: Blob; width: number; height: number }> {
+  const img = await loadImage(file);
+  const scale = Math.min(1, IMAGE_MAX_SIDE / Math.max(img.naturalWidth, img.naturalHeight));
+  const width = Math.round(img.naturalWidth * scale);
+  const height = Math.round(img.naturalHeight * scale);
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  canvas.getContext('2d')!.drawImage(img, 0, 0, width, height);
+  URL.revokeObjectURL(img.src);
+  return { blob: await toJpeg(canvas, 0.82), width, height };
+}
+
+/** A photo as a small JPEG data URL (side chats keep photos in the database): at most 1280px and ~450KB. */
+export async function imageDataUrl(file: File): Promise<string> {
+  if (!file.type.startsWith('image/')) throw new Error('אפשר לשלוח כאן רק תמונות');
+  const img = await loadImage(file);
+  let side = 1280;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const scale = Math.min(1, side / Math.max(img.naturalWidth, img.naturalHeight));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(img.naturalWidth * scale);
+    canvas.height = Math.round(img.naturalHeight * scale);
+    canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
+    const url = canvas.toDataURL('image/jpeg', attempt < 3 ? 0.8 - attempt * 0.1 : 0.6);
+    if (url.length <= 600_000) {
+      URL.revokeObjectURL(img.src);
+      return url;
+    }
+    if (attempt >= 2) side = Math.round(side * 0.75);
+  }
+  URL.revokeObjectURL(img.src);
+  throw new Error('התמונה גדולה מדי');
+}
+
+function videoInfo(file: File): Promise<{ width: number; height: number; duration: number }> {
+  return new Promise((resolve, reject) => {
+    const v = document.createElement('video');
+    v.preload = 'metadata';
+    v.onloadedmetadata = () => {
+      resolve({ width: v.videoWidth, height: v.videoHeight, duration: v.duration });
+      URL.revokeObjectURL(v.src);
+    };
+    v.onerror = () => reject(new Error('לא הצלחנו לקרוא את הסרטון'));
+    v.src = URL.createObjectURL(file);
+  });
+}
+
+async function put(path: string, body: Blob, contentType: string) {
+  const { error } = await supabase.storage.from(BUCKET).upload(path, body, { contentType, upsert: false });
+  if (error) throw new Error(error.message.includes('exceeded') ? 'הקובץ גדול מדי' : 'ההעלאה נכשלה. נסה שוב.');
+}
+
+/** Validates, shrinks (photos) and uploads a chat attachment. Throws a Hebrew message on failure. */
+export async function uploadAttachment(file: File): Promise<Attachment> {
+  const id = crypto.randomUUID();
+  if (file.type === 'image/gif') {
+    if (file.size > MAX_GIF_BYTES) throw new Error('קובץ ה-GIF גדול מדי (עד 8MB)');
+    const img = await loadImage(file);
+    const path = `m/${id}.gif`;
+    await put(path, file, 'image/gif');
+    return { type: 'image', path, width: img.naturalWidth, height: img.naturalHeight, size: file.size };
+  }
+  if (file.type.startsWith('image/')) {
+    const { blob, width, height } = await shrinkImage(file);
+    const path = `m/${id}.jpg`;
+    await put(path, blob, 'image/jpeg');
+    return { type: 'image', path, width, height, size: blob.size };
+  }
+  if (file.type.startsWith('video/')) {
+    if (file.size > MAX_VIDEO_BYTES) throw new Error('הסרטון גדול מדי. אפשר להעלות סרטונים עד 20MB.');
+    const info = await videoInfo(file);
+    if (info.duration > MAX_VIDEO_SECONDS) throw new Error('הסרטון ארוך מדי. אפשר להעלות סרטונים עד דקה וחצי.');
+    const ext = file.type === 'video/webm' ? 'webm' : file.type === 'video/quicktime' ? 'mov' : 'mp4';
+    const path = `m/${id}.${ext}`;
+    await put(path, file, file.type || 'video/mp4');
+    return { type: 'video', path, ...info, size: file.size };
+  }
+  throw new Error('אפשר לצרף רק תמונות וסרטונים');
+}
+
+/** Square-crops and uploads a profile photo; returns the stored path. */
+/** Profile background: cropped to a 3:1 banner, at most 1500px wide. */
+export async function uploadCover(file: File): Promise<string> {
+  if (!file.type.startsWith('image/')) throw new Error('יש לבחור קובץ תמונה');
+  const img = await loadImage(file);
+  const w = img.naturalWidth;
+  const h = Math.min(img.naturalHeight, Math.round(w / 3));
+  const sw = Math.round(h * 3);
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.min(1500, sw);
+  canvas.height = Math.round(canvas.width / 3);
+  canvas.getContext('2d')!.drawImage(img, (w - sw) / 2, (img.naturalHeight - h) / 2, sw, h, 0, 0, canvas.width, canvas.height);
+  URL.revokeObjectURL(img.src);
+  const path = `c/${crypto.randomUUID()}.jpg`;
+  await put(path, await toJpeg(canvas, 0.85), 'image/jpeg');
+  return path;
+}
+
+export async function uploadAvatar(file: File): Promise<string> {
+  if (!file.type.startsWith('image/')) throw new Error('יש לבחור קובץ תמונה');
+  const img = await loadImage(file);
+  const side = Math.min(img.naturalWidth, img.naturalHeight);
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = Math.min(512, side);
+  canvas
+    .getContext('2d')!
+    .drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, canvas.width, canvas.height);
+  URL.revokeObjectURL(img.src);
+  const path = `a/${crypto.randomUUID()}.jpg`;
+  await put(path, await toJpeg(canvas, 0.86), 'image/jpeg');
+  return path;
+}
