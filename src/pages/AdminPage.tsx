@@ -192,7 +192,7 @@ export default function AdminPage() {
           )}
           {isOwner && (
             <button className={tab === 'guest' ? 'on' : ''} onClick={() => setTab('guest')} role="tab">
-              <Icon name="visibility" size={20} /> צפייה ללא התחברות
+              <Icon name="visibility" size={20} /> גישה לאתר
               {guestUntil && <span className="badge-count">פתוח</span>}
             </button>
           )}

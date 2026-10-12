@@ -1023,6 +1023,21 @@ select pg_temp.check((select count(*) = 0 from side_chat_info('old')), 'an expir
 reset role;
 select pg_temp.check((select count(*) = 0 from side_chats where token = 'old'), 'expired chats are deleted');
 
+-- Maintenance mode: everyone can read the flag, only the owner switches it.
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000a');
+select pg_temp.denied($$select set_maintenance(true)$$, 'a regular admin cannot switch maintenance mode');
+reset role;
+select pg_temp.as_user('00000000-0000-0000-0000-0000000000e0');
+select set_maintenance(true);
+reset role;
+select pg_temp.as_anon();
+select pg_temp.check(site_maintenance(), 'visitors see that the site is in maintenance');
+reset role;
+select pg_temp.as_user('00000000-0000-0000-0000-0000000000e0');
+select set_maintenance(false);
+reset role;
+select pg_temp.check(not site_maintenance(), 'the owner turns maintenance off');
+
 -- ===== Reset (last: wipes everything) =====
 update auth.users set encrypted_password = extensions.crypt('owner-pass', extensions.gen_salt('bf', 4)) where id = '00000000-0000-0000-0000-0000000000e0';
 select pg_temp.as_user('00000000-0000-0000-0000-0000000000e0');

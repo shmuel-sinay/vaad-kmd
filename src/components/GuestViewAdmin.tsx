@@ -4,6 +4,7 @@ import { supabase } from '../supabase';
 import { errorText, fullDate } from '../lib/format';
 import { useFeedback } from './Feedback';
 import Icon from './Icon';
+import MaintenanceAdmin from './MaintenanceAdmin';
 
 const CHOICES = [
   { hours: 24, label: 'יום אחד' },
@@ -38,6 +39,8 @@ export default function GuestViewAdmin() {
   }
 
   return (
+    <>
+    <MaintenanceAdmin />
     <section className="card-section">
       <div className="section-head">
         <h2>צפייה ללא התחברות</h2>
@@ -60,5 +63,6 @@ export default function GuestViewAdmin() {
         ))}
       </div>
     </section>
+    </>
   );
 }

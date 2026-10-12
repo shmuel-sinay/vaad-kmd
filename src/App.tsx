@@ -21,12 +21,23 @@ import TermsGate from './pages/TermsGate';
 import GuestPage from './pages/GuestPage';
 import BotPage from './pages/BotPage';
 import SideChatPage from './pages/SideChatPage';
+import MaintenancePage from './pages/MaintenancePage';
 
 export default function App() {
-  const { session, loading, me, isAdmin, recovering, schemaOutdated, isGuest } = useApp();
+  const { session, loading, me, isAdmin, isOwner, recovering, schemaOutdated, isGuest } = useApp();
   // Guest view: visitors start on the login screen, which offers read-only entry while it is open.
   const [guestMode, setGuestMode] = useState(false);
   const { pathname } = useLocation();
+  // Maintenance mode (site_settings.maintenance): everyone but the owner sees only "under construction".
+  // The owner logs in through the unlinked #/dev.
+  const [maintenance, setMaintenance] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!isConfigured) return;
+    const check = () => supabase.rpc('site_maintenance').then(({ data, error }) => setMaintenance(error ? false : !!data));
+    check();
+    const t = setInterval(check, 60000);
+    return () => clearInterval(t);
+  }, []);
   // A temporary side chat (#/x/<token>) stands alone: no login, nothing of the community site around it.
   const side = /^\/x\/([\w-]{16,})$/.exec(pathname);
   if (side && isConfigured) return <SideChatPage token={side[1]} />;
@@ -42,7 +53,11 @@ export default function App() {
     );
   }
 
-  if (loading) return <div className="auth-screen"><div className="spinner" /></div>;
+  if (loading || maintenance === null) return <div className="auth-screen"><div className="spinner" /></div>;
+  if (maintenance && !isOwner) {
+    if (pathname === '/dev' && !session) return <AuthPage />;
+    if (!(pathname === '/dev' && session && !me)) return <MaintenancePage />;
+  }
   if (!session) {
     if (isGuest && guestMode) return <GuestPage onLogin={() => setGuestMode(false)} />;
     return <AuthPage onGuest={isGuest ? () => setGuestMode(true) : undefined} />;

@@ -2535,6 +2535,24 @@ begin
   return v;
 end $$;
 
+-- Maintenance mode: while on, everyone but the owner sees only an "under construction" page (the owner logs in at #/dev).
+-- Cosmetic gate in the app; the data stays protected by RLS as always.
+alter table site_settings add column if not exists maintenance boolean not null default false;
+create or replace function site_maintenance() returns boolean
+language sql stable security definer set search_path = public as $$
+  select coalesce((select maintenance from site_settings where id = 1), false);
+$$;
+create or replace function set_maintenance(p_on boolean) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  if not is_owner() then raise exception 'רק מנהל-העל' using errcode = '42501'; end if;
+  insert into site_settings (id, maintenance) values (1, coalesce(p_on, false))
+  on conflict (id) do update set maintenance = excluded.maintenance;
+end $$;
+revoke execute on function set_maintenance(boolean) from anon, public;
+grant execute on function set_maintenance(boolean) to authenticated;
+grant execute on function site_maintenance() to anon, authenticated;
+
 revoke execute on function set_guest_view(int) from anon, public;
 grant execute on function set_guest_view(int) to authenticated;
 grant execute on function guest_view_open(), guest_view_until() to anon, authenticated;
