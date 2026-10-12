@@ -29,11 +29,12 @@ export default function App() {
   const [guestMode, setGuestMode] = useState(false);
   const { pathname } = useLocation();
   // Maintenance mode (site_settings.maintenance): everyone but the owner sees only "under construction".
-  // The owner logs in through the unlinked #/dev.
+  // The owner logs in through the unlinked #/dev. Fails closed: if the flag can't be read (e.g. schema.sql not updated yet
+  // or the database refuses), the site counts as closed.
   const [maintenance, setMaintenance] = useState<boolean | null>(null);
   useEffect(() => {
     if (!isConfigured) return;
-    const check = () => supabase.rpc('site_maintenance').then(({ data, error }) => setMaintenance(error ? false : !!data));
+    const check = () => supabase.rpc('site_maintenance').then(({ data, error }) => setMaintenance(error ? true : !!data));
     check();
     const t = setInterval(check, 60000);
     return () => clearInterval(t);

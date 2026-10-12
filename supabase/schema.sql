@@ -2535,9 +2535,11 @@ begin
   return v;
 end $$;
 
--- Maintenance mode: while on, everyone but the owner sees only an "under construction" page (the owner logs in at #/dev).
--- Cosmetic gate in the app; the data stays protected by RLS as always.
-alter table site_settings add column if not exists maintenance boolean not null default false;
+-- Maintenance mode: while on, everyone but the owner sees only an "under construction" page (the owner logs in at #/dev),
+-- and the database answers nobody but the owner (maintenance_gate, run by the API before every request).
+-- The column starts ON when it is first added (the owner asked to close the site); later runs keep whatever he set.
+alter table site_settings add column if not exists maintenance boolean not null default true;
+insert into site_settings (id) values (1) on conflict (id) do nothing;
 create or replace function site_maintenance() returns boolean
 language sql stable security definer set search_path = public as $$
   select coalesce((select maintenance from site_settings where id = 1), false);
@@ -2549,6 +2551,26 @@ begin
   insert into site_settings (id, maintenance) values (1, coalesce(p_on, false))
   on conflict (id) do update set maintenance = excluded.maintenance;
 end $$;
+-- Runs before every API request (PostgREST db-pre-request). While maintenance is on, only the owner, the Edge Functions
+-- (service role), the maintenance flag itself and the side chats get through.
+create or replace function maintenance_gate() returns void
+language plpgsql security definer set search_path = public as $$
+declare
+  p text := coalesce(current_setting('request.path', true), '');
+  r text := coalesce(nullif(current_setting('request.jwt.claims', true), '')::json ->> 'role', '');
+begin
+  if not coalesce((select maintenance from site_settings where id = 1), false) then return; end if;
+  if r = 'service_role' or p = '/rpc/site_maintenance' or p like '/rpc/side\_chat\_%' or is_owner() then return; end if;
+  raise exception 'האתר בשלבי פיתוח' using errcode = '42501';
+end $$;
+grant execute on function maintenance_gate() to anon, authenticated;
+do $$ begin
+  if exists (select 1 from pg_roles where rolname = 'authenticator') then
+    alter role authenticator set pgrst.db_pre_request = 'public.maintenance_gate';
+    notify pgrst, 'reload config';
+  end if;
+end $$;
+
 revoke execute on function set_maintenance(boolean) from anon, public;
 grant execute on function set_maintenance(boolean) to authenticated;
 grant execute on function site_maintenance() to anon, authenticated;
