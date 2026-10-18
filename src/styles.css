@@ -1520,3 +1520,8 @@ button.author:hover, .title-link:hover { text-decoration: underline; }
   .b-toolbar .icon-btn.small { width: 28px; height: 28px; }
   .b-toolbar .like-btn + .b-quick, .b-toolbar .b-tools { border-inline-start: 0; margin-inline-start: 0; padding-inline-start: 0; }
 }
+
+/* Folded sidebar group heading ("כלים") */
+.nav-toggle { width: 100%; background: none; border: 0; cursor: pointer; font-family: inherit; text-align: start; color: var(--text-2); }
+.nav-toggle:hover { color: var(--text); }
+.app.collapsed .nav-toggle { display: none; }

@@ -465,26 +465,23 @@ export default function RoomPage() {
 
   const headerTools = (
     <div className="room-tools">
-      {canWrite && (
-        <button className="chip-btn" data-tour="flash" onClick={() => setGagOpen(true)} title="מחולל מבזקים">
-          <Icon name="newspaper" size={18} />
-          <span className="chip-label">מבזק</span>
-        </button>
-      )}
-      <button className={`chip-btn ${panel === 'pins' ? 'on' : ''}`} onClick={() => setPanel((v) => (v === 'pins' ? null : 'pins'))} title="לוח הודעות מוצמדות">
-        <Icon name="keep" size={18} />
-        {pinned.length > 0 && <span>{pinned.length}</span>}
-      </button>
-      <button className={`chip-btn ${panel === 'people' ? 'on' : ''}`} onClick={() => setPanel((v) => (v === 'people' ? null : 'people'))} title="משתתפים">
-        <Icon name="group" size={18} />
-        <span>{online.size}</span>
-      </button>
       <div className="menu-anchor">
-        <button className="icon-btn" onClick={() => setMenu((v) => !v)} aria-label="אפשרויות החדר">
+        <button className="icon-btn" data-tour="flash" onClick={() => setMenu((v) => !v)} aria-label="אפשרויות החדר" title="מבזקים, הודעות מוצמדות, משתתפים ועוד">
           <Icon name="more_vert" />
         </button>
         {menu && (
           <div className="menu" onMouseLeave={() => setMenu(false)}>
+            {canWrite && (
+              <button className="menu-item" onClick={() => { setMenu(false); setGagOpen(true); }}>
+                <Icon name="newspaper" /> מחולל מבזקים
+              </button>
+            )}
+            <button className="menu-item" onClick={() => { setMenu(false); setPanel((v) => (v === 'pins' ? null : 'pins')); }}>
+              <Icon name="keep" /> הודעות מוצמדות{pinned.length > 0 ? ` (${pinned.length})` : ''}
+            </button>
+            <button className="menu-item" onClick={() => { setMenu(false); setPanel((v) => (v === 'people' ? null : 'people')); }}>
+              <Icon name="group" /> משתתפים ({online.size} מחוברים)
+            </button>
             {canWrite && !myMute && (
               <button className="menu-item" onClick={() => { setMenu(false); setScheduleOpen(true); }}>
                 <Icon name="schedule" /> הודעה מתוזמנת

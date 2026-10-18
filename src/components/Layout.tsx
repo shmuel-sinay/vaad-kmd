@@ -23,6 +23,14 @@ export default function Layout() {
   const [noticeClosed, setNoticeClosed] = useState(false);
   const [drawer, setDrawer] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
+  // The "כלים" group in the sidebar can be folded; the choice is remembered in this browser.
+  const [toolsOpen, setToolsOpen] = useState(() => {
+    try { return localStorage.getItem('nav-tools') !== 'closed'; } catch { return true; }
+  });
+  const toggleTools = () => setToolsOpen((v) => {
+    try { localStorage.setItem('nav-tools', v ? 'closed' : 'open'); } catch { /* private mode */ }
+    return !v;
+  });
   const [newChat, setNewChat] = useState(false);
   const [newRoom, setNewRoom] = useState(false);
   const [menu, setMenu] = useState(false);
@@ -178,18 +186,32 @@ export default function Layout() {
             <span className="nav-label">הצ'אט הראשי</span>
             {mainRoom && mainRoom.unread > 0 && <span className="badge-count">{badge(mainRoom.unread)}</span>}
           </NavLink>
-          <NavLink to="/starred" className="nav-item">
-            <Icon name="star" />
-            <span className="nav-label">מסומנות בכוכב</span>
-          </NavLink>
-          <NavLink to="/events" data-tour="events" className="nav-item">
-            <Icon name="calendar_month" />
-            <span className="nav-label">לוח אירועים</span>
-          </NavLink>
-          <NavLink to="/polls" data-tour="polls" className="nav-item">
-            <Icon name="ballot" />
-            <span className="nav-label">סקרים</span>
-          </NavLink>
+        </nav>
+
+        <div className="nav-section">
+          <button className="nav-heading nav-toggle" onClick={toggleTools} aria-expanded={toolsOpen}>
+            <span>כלים</span>
+            <Icon name={toolsOpen ? 'keyboard_arrow_up' : 'keyboard_arrow_down'} size={20} />
+          </button>
+          {toolsOpen && (
+            <>
+              <NavLink to="/starred" className="nav-item">
+                <Icon name="star" />
+                <span className="nav-label">מסומנות בכוכב</span>
+              </NavLink>
+              <NavLink to="/events" data-tour="events" className="nav-item">
+                <Icon name="calendar_month" />
+                <span className="nav-label">לוח אירועים</span>
+              </NavLink>
+              <NavLink to="/polls" data-tour="polls" className="nav-item">
+                <Icon name="ballot" />
+                <span className="nav-label">סקרים</span>
+              </NavLink>
+            </>
+          )}
+        </div>
+
+        <nav className="nav">
           <NavLink to="/contact" data-tour="contact" className="nav-item">
             <Icon name="mail" />
             <span className="nav-label">יצירת קשר עם הניהול</span>
