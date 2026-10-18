@@ -178,6 +178,9 @@ alter table messages add column if not exists flash jsonb;
 -- Special-purpose rooms created by this file (e.g. 'blessings': מזל טוב וברכות).
 alter table channels add column if not exists purpose text;
 create unique index if not exists channels_purpose on channels (purpose) where purpose is not null;
+-- A room's number on the phone line (extension "חדרים"); set by admins only (guard_channel_update).
+alter table channels add column if not exists phone_key int check (phone_key between 1 and 999);
+create unique index if not exists channels_phone_key on channels (phone_key) where phone_key is not null;
 insert into channels (name, description, purpose, position)
 select 'מזל טוב וברכות', 'ברכות לשמחות: אירוסין, חתונות, בר מצווה ועוד. אפשר לשבץ את השמחה בלוח האירועים.', 'blessings',
        coalesce((select max(position) + 1 from channels), 0)
@@ -695,8 +698,11 @@ create or replace function valid_attachment(a jsonb) returns boolean
 language sql immutable as $$
   select a is null or (
     jsonb_typeof(a) = 'object'
-    and a ->> 'type' in ('image', 'video')
-    and (a ->> 'path') ~ '^m/[0-9a-f-]{36}\.(jpg|jpeg|png|webp|gif|mp4|webm|mov)$'
+    and ((a ->> 'type' in ('image', 'video')
+          and (a ->> 'path') ~ '^m/[0-9a-f-]{36}\.(jpg|jpeg|png|webp|gif|mp4|webm|mov)$')
+         -- a voice message recorded on the phone line (the copy on the site may be missing)
+         or (a ->> 'type' = 'audio' and coalesce(a ->> 'yemot', '') ~ '^[0-9]{6,20}$'
+             and (a ->> 'path' is null or (a ->> 'path') ~ '^m/[0-9a-f-]{36}\.wav$')))
   );
 $$;
 
@@ -947,6 +953,7 @@ begin
       new.admin_only_post := old.admin_only_post;
       new.position        := old.position;
     end if;
+    if not is_admin() or old.is_main then new.phone_key := old.phone_key; end if;
   end if;
   return new;
 end $$;
@@ -2256,7 +2263,7 @@ begin
   truncate feedback_messages, message_reports, mute_log, scheduled_messages, room_mutes, push_queue, push_subscriptions, push_prefs,
     quiz_guesses, quote_quizzes, confession_comments, confession_reactions, confessions, events, email_queue, email_prefs, nickname_votes, nicknames, birthday_posts, birthdays, feedback, poll_votes, poll_options, polls, dm_reactions, dm_messages, dm_participants, dm_conversations, reactions, message_likes, stars,
     anon_authors, wall_posts, channel_reads, messages, channels, preapproved_emails, roster restart identity cascade;
-  foreach t in array array['thread_likes', 'thread_reads', 'threads', 'side_messages', 'side_chat_people', 'side_chats', 'waiting_mail', 'phone_callers', 'phone_listeners'] loop
+  foreach t in array array['thread_likes', 'thread_reads', 'threads', 'side_messages', 'side_chat_people', 'side_chats', 'waiting_mail', 'phone_callers', 'phone_listeners', 'phone_seen', 'phone_ids', 'phone_login_fails', 'phone_tzintuks'] loop
     if to_regclass('public.' || t) is not null then execute format('truncate %I cascade', t); end if;
   end loop;
   delete from auth.users where id is not null;  -- Supabase rejects a DELETE without WHERE
@@ -3777,9 +3784,12 @@ grant execute on function side_chat_info(text, text), side_chat_join(text, text,
   side_chat_messages(text, text, bigint), side_chat_image(text, text, bigint), side_chat_send(text, text, text, text) to anon, authenticated;
 
 -- ---------- Phone line (ימות המשיח) ----------
--- The Edge Function "ivr" serves the phone line: it reads the main room aloud and turns a recording made on
--- the phone into a voice message there (attachment type 'audio', author unknown, so it shows as "מהטלפון").
--- The caller's number is kept apart, readable only by the owner, like an anonymous author.
+-- The Edge Function "ivr" serves the phone line (all of it with the service role):
+--   listen / rooms: rooms read aloud with Yemot's TTS, newest first from where this number last listened;
+--     anyone may record a reply, posted without a name ("מהטלפון"); the caller's number is kept apart, owner-only.
+--   personal area (a 6-digit code each member picks on the site): his private chats (hear, answer by voice),
+--     a voice message to the main room in his own name, and polls. These run the regular functions as him
+--     (phone_act sets the login), so every rule of the site (mute, anonymity, closed chats...) applies.
 create table if not exists phone_callers (
   message_id bigint primary key references messages on delete cascade,
   phone      text not null,
@@ -3799,9 +3809,101 @@ create table if not exists phone_listeners (
 alter table phone_listeners enable row level security;
 revoke all on phone_listeners from anon, authenticated;
 
--- p_file: the recording's name on the phone system (digits); p_path: the copy in the media bucket (null if it
--- couldn't be copied: it can still be heard on the phone). Each recording is posted once; at most 30 an hour.
-create or replace function ivr_post(p_file text, p_path text, p_seconds int, p_phone text)
+-- Where each caller stopped in each room ("who" = his number, or "u:<id>" after the personal code). Edge Function only.
+create table if not exists phone_seen (
+  who        text not null,
+  channel_id bigint not null references channels on delete cascade,
+  last_id    bigint not null,
+  primary key (who, channel_id)
+);
+alter table phone_seen enable row level security;
+revoke all on phone_seen from anon, authenticated;
+
+-- The member's personal phone code, and (optionally) his number for a ring when the management flags a message.
+create table if not exists phone_ids (
+  user_id    uuid primary key references profiles on delete cascade,
+  code       text not null unique check (code ~ '^[0-9]{6}$'),
+  phone      text check (phone ~ '^0[0-9]{8,9}$'),
+  tzintuk    boolean not null default false,
+  created_at timestamptz not null default now()
+);
+alter table phone_ids enable row level security;  -- no policies: functions only
+revoke all on phone_ids from anon, authenticated;
+
+-- Wrong codes, for a lockout (5 an hour per number, 30 an hour in all).
+create table if not exists phone_login_fails (
+  phone text not null,
+  at    timestamptz not null default now()
+);
+alter table phone_login_fails enable row level security;
+revoke all on phone_login_fails from anon, authenticated;
+
+create or replace function my_phone_id() returns table (code text, phone text, tzintuk boolean)
+language sql stable security definer set search_path = public as $$
+  select code, phone, tzintuk from phone_ids where user_id = auth.uid() and is_active();
+$$;
+
+create or replace function set_phone_id(p_code text, p_phone text, p_tzintuk boolean) returns void
+language plpgsql security definer set search_path = public as $$
+declare
+  c text := trim(coalesce(p_code, ''));
+  ph text := nullif(regexp_replace(coalesce(p_phone, ''), '\D', '', 'g'), '');
+begin
+  if not is_active() then raise exception 'אין הרשאה' using errcode = '42501'; end if;
+  if c !~ '^[0-9]{6}$' then raise exception 'הקוד צריך להיות 6 ספרות'; end if;
+  if c ~ '^(.)\1{5}$' or c in ('123456', '654321', '012345', '543210', '123123', '121212') then
+    raise exception 'הקוד קל מדי לניחוש, בחר קוד אחר';
+  end if;
+  if ph is not null and ph !~ '^0[0-9]{8,9}$' then raise exception 'מספר הטלפון לא תקין'; end if;
+  if exists (select 1 from phone_ids where code = c and user_id <> auth.uid()) then
+    raise exception 'הקוד הזה תפוס, בחר קוד אחר';
+  end if;
+  insert into phone_ids (user_id, code, phone, tzintuk) values (auth.uid(), c, ph, coalesce(p_tzintuk, false) and ph is not null)
+  on conflict (user_id) do update set code = excluded.code, phone = excluded.phone, tzintuk = excluded.tzintuk;
+end $$;
+
+create or replace function clear_phone_id() returns void
+language sql security definer set search_path = public as $$
+  delete from phone_ids where user_id = auth.uid();
+$$;
+
+-- Edge Function only: the member behind a code (active members only), or null. Raises when locked out.
+create or replace function phone_login(p_code text, p_caller text) returns uuid
+language plpgsql security definer set search_path = public as $$
+declare
+  u uuid;
+  caller text := coalesce(nullif(regexp_replace(coalesce(p_caller, ''), '\D', '', 'g'), ''), 'חסוי');
+begin
+  if (select count(*) from phone_login_fails where phone = caller and at > now() - interval '1 hour') >= 5
+     or (select count(*) from phone_login_fails where at > now() - interval '1 hour') >= 30 then
+    raise exception 'locked';
+  end if;
+  select i.user_id into u from phone_ids i join profiles p on p.id = i.user_id
+   where i.code = coalesce(p_code, '') and p.status = 'active';
+  if u is null then
+    insert into phone_login_fails (phone) values (caller);
+    delete from phone_login_fails where at < now() - interval '1 day';
+  end if;
+  return u;
+end $$;
+
+-- Runs the following statements of this transaction as that member (auth.uid()), so the site's own functions
+-- check everything. Only for the functions below, which only the Edge Function may call.
+create or replace function phone_act(p_user uuid) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  if p_user is null or not exists (select 1 from profiles where id = p_user and status = 'active') then
+    raise exception 'אין הרשאה' using errcode = '42501';
+  end if;
+  perform set_config('request.jwt.claim.sub', p_user::text, true);
+end $$;
+
+-- A voice message recorded without a code: no name. p_file: the recording's name on the phone system (digits);
+-- p_path: its copy in the media bucket (null if it couldn't be copied: it is still heard on the phone).
+-- Main room or a room that has a phone number. Each recording once; at most 30 an hour.
+drop function if exists ivr_post(text, text, int, text);
+create or replace function ivr_post(p_file text, p_path text, p_seconds int, p_phone text,
+                                    p_channel bigint default null, p_reply_to bigint default null)
 returns bigint
 language plpgsql security definer set search_path = public as $$
 declare
@@ -3814,32 +3916,140 @@ begin
   if (select count(*) from phone_callers where created_at > now() - interval '1 hour') >= 30 then
     raise exception 'יותר מדי הקלטות בשעה האחרונה';
   end if;
-  select id into ch from channels where is_main;
-  if ch is null then raise exception 'אין צ''אט ראשי'; end if;
-  insert into messages (channel_id, author_id, anonymous, body, attachment)
+  select id into ch from channels
+   where case when p_channel is null then is_main else id = p_channel and (is_main or phone_key is not null) end
+     and not admin_only_post;
+  if ch is null then raise exception 'אי אפשר להקליט לחדר הזה'; end if;
+  insert into messages (channel_id, author_id, anonymous, body, attachment, reply_to)
   values (ch, null, true, '',
           jsonb_strip_nulls(jsonb_build_object('type', 'audio', 'path', p_path, 'yemot', p_file, 'phone', true,
-                                               'duration', greatest(0, least(coalesce(p_seconds, 0), 600)))))
+                                               'duration', greatest(0, least(coalesce(p_seconds, 0), 600)))),
+          (select id from messages where id = p_reply_to and channel_id = ch))
   returning id into mid;
   insert into phone_callers (message_id, phone) values (mid, left(coalesce(nullif(trim(p_phone), ''), 'חסוי'), 20));
   return mid;
 end $$;
 
--- A short automatic transcript under a phone recording (Gemini, through the shared AI keys). Only once, only on
--- an untouched phone message; not marked as edited.
+-- With the personal code: a voice message in his own name (send_message checks mute, room rules...).
+create or replace function phone_send_message(p_user uuid, p_channel bigint, p_file text, p_path text, p_seconds int,
+                                              p_reply_to bigint default null) returns bigint
+language plpgsql security definer set search_path = public as $$
+declare m messages;
+begin
+  perform phone_act(p_user);
+  if exists (select 1 from messages where attachment ->> 'yemot' = p_file) then return null; end if;
+  m := send_message(p_channel, '', p_reply_to, false,
+                    jsonb_strip_nulls(jsonb_build_object('type', 'audio', 'path', p_path, 'yemot', p_file,
+                                                         'duration', greatest(0, least(coalesce(p_seconds, 0), 600)))));
+  return m.id;
+end $$;
+
+-- With the personal code: a voice answer in one of his private chats (send_dm keeps the anonymous side hidden).
+create or replace function phone_send_dm(p_user uuid, p_conv bigint, p_file text, p_path text, p_seconds int) returns bigint
+language plpgsql security definer set search_path = public as $$
+declare m dm_messages;
+begin
+  perform phone_act(p_user);
+  if exists (select 1 from dm_messages where attachment ->> 'yemot' = p_file) then return null; end if;
+  m := send_dm(p_conv, '', null,
+               jsonb_strip_nulls(jsonb_build_object('type', 'audio', 'path', p_path, 'yemot', p_file,
+                                                    'duration', greatest(0, least(coalesce(p_seconds, 0), 600)))));
+  return m.id;
+end $$;
+
+create or replace function phone_dm_read(p_user uuid, p_conv bigint) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  perform phone_act(p_user);
+  perform mark_dm_read(p_conv);
+end $$;
+
+create or replace function phone_vote(p_user uuid, p_poll bigint, p_option bigint) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  perform phone_act(p_user);
+  perform vote_poll(p_poll, array[p_option]);
+end $$;
+
+-- A short automatic transcript under a phone recording (Gemini, through the shared AI keys). Only once, only on a
+-- voice message that has no text yet; not marked as edited.
 create or replace function ivr_transcript(p_message bigint, p_text text) returns void
 language plpgsql security definer set search_path = public as $$
 begin
   if coalesce(trim(p_text), '') = '' then return; end if;
   update messages set body = left('תמלול אוטומטי: ' || trim(p_text), 4000)
-   where id = p_message and not deleted and body = '' and (attachment ->> 'phone')::boolean;
+   where id = p_message and not deleted and body = '' and attachment ->> 'yemot' is not null;
   update messages set edited_at = null where id = p_message;
 end $$;
 
-revoke execute on function ivr_post(text, text, int, text), ivr_transcript(bigint, text) from public, anon, authenticated;
+create or replace function ivr_transcript_dm(p_message bigint, p_text text) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  if coalesce(trim(p_text), '') = '' then return; end if;
+  update dm_messages set body = left('תמלול אוטומטי: ' || trim(p_text), 4000)
+   where id = p_message and not deleted and body = '' and attachment ->> 'yemot' is not null;
+  update dm_messages set edited_at = null where id = p_message;
+end $$;
+
+-- A ring (צינתוק) to the members who asked for one, when an inspector or admin flags a message. Each message once,
+-- at most 5 a day (rings cost units). The Edge Function sends them (tzintuk_batch) and records the result.
+create table if not exists phone_tzintuks (
+  id         bigint generated always as identity primary key,
+  message_id bigint unique references messages on delete set null,
+  by_id      uuid references profiles on delete set null,
+  created_at timestamptz not null default now(),
+  sent_at    timestamptz,
+  result     text
+);
+alter table phone_tzintuks enable row level security;
+drop policy if exists phone_tzintuks_mods on phone_tzintuks;
+create policy phone_tzintuks_mods on phone_tzintuks for select to authenticated using (can_remove_content());
+revoke all on phone_tzintuks from anon, authenticated;
+grant select on phone_tzintuks to authenticated;
+
+create or replace function mark_tzintuk(p_message bigint) returns int
+language plpgsql security definer set search_path = public as $$
+declare n int;
+begin
+  if not (is_active() and can_remove_content()) then raise exception 'אין הרשאה' using errcode = '42501'; end if;
+  if not exists (select 1 from messages where id = p_message and not deleted) then raise exception 'ההודעה לא נמצאה'; end if;
+  if exists (select 1 from phone_tzintuks where message_id = p_message) then raise exception 'כבר נשלח צינתוק על ההודעה הזו'; end if;
+  if (select count(*) from phone_tzintuks where created_at > now() - interval '1 day') >= 5 then
+    raise exception 'אפשר לשלוח עד 5 צינתוקים ביום';
+  end if;
+  select count(*) into n from phone_ids i join profiles p on p.id = i.user_id where i.tzintuk and i.phone is not null and p.status = 'active';
+  if n = 0 then raise exception 'אף חבר עוד לא ביקש צינתוק'; end if;
+  insert into phone_tzintuks (message_id, by_id) values (p_message, auth.uid());
+  if to_regproc('net.http_post') is not null then
+    execute $k$select net.http_post(url := 'https://onlefrwepwnfowqduimh.supabase.co/functions/v1/ivr?mode=tzintuk',
+                                     headers := '{"Content-Type": "application/json"}'::jsonb, body := '{}'::jsonb)$k$;
+  end if;
+  return n;
+end $$;
+
+-- Edge Function only: pending rings with the numbers to ring; marks them taken.
+create or replace function tzintuk_batch() returns table (id bigint, phones text[])
+language plpgsql security definer set search_path = public as $$
+declare ids bigint[];
+begin
+  select array_agg(t.id) into ids from phone_tzintuks t where t.sent_at is null;
+  if ids is null then return; end if;
+  update phone_tzintuks set sent_at = now() where phone_tzintuks.id = any(ids);
+  return query select x, array(select distinct i.phone from phone_ids i join profiles p on p.id = i.user_id
+                                 where i.tzintuk and i.phone is not null and p.status = 'active')
+                 from unnest(ids) x;
+end $$;
+
+revoke execute on function ivr_post(text, text, int, text, bigint, bigint), ivr_transcript(bigint, text), ivr_transcript_dm(bigint, text),
+  phone_login(text, text), phone_act(uuid), phone_send_message(uuid, bigint, text, text, int, bigint), phone_send_dm(uuid, bigint, text, text, int),
+  phone_dm_read(uuid, bigint), phone_vote(uuid, bigint, bigint), tzintuk_batch() from public, anon, authenticated;
+revoke execute on function my_phone_id(), set_phone_id(text, text, boolean), clear_phone_id(), mark_tzintuk(bigint) from public, anon;
+grant execute on function my_phone_id(), set_phone_id(text, text, boolean), clear_phone_id(), mark_tzintuk(bigint) to authenticated;
 do $$ begin
   if exists (select 1 from pg_roles where rolname = 'service_role') then
-    grant execute on function ivr_post(text, text, int, text), ivr_transcript(bigint, text) to service_role;
+    grant execute on function ivr_post(text, text, int, text, bigint, bigint), ivr_transcript(bigint, text), ivr_transcript_dm(bigint, text),
+      phone_login(text, text), phone_send_message(uuid, bigint, text, text, int, bigint), phone_send_dm(uuid, bigint, text, text, int),
+      phone_dm_read(uuid, bigint), phone_vote(uuid, bigint, bigint), tzintuk_batch() to service_role;
   end if;
 end $$;
 

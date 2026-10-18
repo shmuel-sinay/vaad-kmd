@@ -1092,6 +1092,59 @@ select pg_temp.check((select count(*) = 1 from phone_callers where phone = '0501
 select pg_temp.denied($$select * from phone_listeners$$, 'nobody on the site reads the phone listeners list');
 reset role;
 
+-- Phone line, personal area: a member's own code, answers as himself, polls, rings.
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000a');
+select pg_temp.denied($$select set_phone_id('123456', null, false)$$, 'an easy phone code is refused');
+select pg_temp.denied($$select set_phone_id('12ab56', null, false)$$, 'a phone code is 6 digits');
+select set_phone_id('482915', '0501112233', true);
+select pg_temp.check((select code = '482915' and tzintuk from my_phone_id()), 'a member sets his phone code and ring wish');
+reset role;
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000b');
+select pg_temp.denied($$select set_phone_id('482915', null, false)$$, 'a phone code is unique');
+select set_phone_id('739104', null, true);
+select pg_temp.check((select not tzintuk from my_phone_id()), 'a ring needs a number');
+reset role;
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000a');
+select pg_temp.denied($$select * from phone_ids$$, 'members cannot read the phone codes table');
+select pg_temp.denied($$select phone_login('482915', '0501')$$, 'members cannot call the phone login');
+reset role;
+select set_config('request.jwt.claim.sub', '', false);
+select pg_temp.check(phone_login('482915', '0509990000') = '00000000-0000-0000-0000-00000000000a', 'the phone code finds its member');
+select pg_temp.check(phone_login('000001', '0509990000') is null, 'a wrong phone code finds nobody');
+select phone_login('000002', '0509990000'); select phone_login('000003', '0509990000'); select phone_login('000004', '0509990000'); select phone_login('000005', '0509990000');
+select pg_temp.denied($$select phone_login('482915', '0509990000')$$, 'five wrong codes lock the number out');
+select pg_temp.check(phone_send_message('00000000-0000-0000-0000-00000000000a', (select id from channels where is_main), '1730000000555', null, 7) is not null, 'a voice message in the member''s own name');
+select pg_temp.check((select author_id = '00000000-0000-0000-0000-00000000000a' and not anonymous from messages where attachment ->> 'yemot' = '1730000000555'), 'the voice message carries his name');
+select pg_temp.check(phone_send_message('00000000-0000-0000-0000-00000000000a', (select id from channels where is_main), '1730000000555', null, 7) is null, 'a recording is posted once');
+select pg_temp.check((select count(*) = 0 from phone_callers pc join messages m on m.id = pc.message_id where m.attachment ->> 'yemot' = '1730000000555'), 'a named voice message keeps no caller number');
+select pg_temp.denied($$select phone_send_message('00000000-0000-0000-0000-0000000000ff', (select id from channels where is_main), '1730000000556', null, 7)$$, 'an unknown user cannot send by phone');
+select pg_temp.check(ivr_post('1730000000777', null, 4, '0501112233', (select id from channels where is_main)) is not null, 'a nameless recording to the main room');
+select pg_temp.denied($$select ivr_post('1730000000778', null, 4, '1', 999999)$$, 'a nameless recording needs the main room or a numbered room');
+-- Room numbers: admins only, never the main room.
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000a');
+create temp table phone_room as select (create_room('חדר טלפון', null)).id as id;
+update channels set phone_key = 7 where id = (select id from phone_room);
+select pg_temp.check((select phone_key = 7 from channels where id = (select id from phone_room)), 'an admin gives a room a phone number');
+update channels set phone_key = 8 where is_main;
+select pg_temp.check((select phone_key is null from channels where is_main), 'the main room never gets a phone number');
+reset role;
+select pg_temp.check(ivr_post('1730000000779', null, 4, '1', (select id from phone_room)) is not null, 'a nameless recording to a numbered room');
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000b');
+update channels set phone_key = 9 where id = (select id from phone_room);
+select pg_temp.check((select phone_key = 7 from channels where id = (select id from phone_room)), 'a member cannot change a room''s phone number');
+reset role;
+-- Rings: only for a message an admin flags, once, to those who asked.
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000b');
+select pg_temp.denied($$select mark_tzintuk((select max(id) from messages))$$, 'a member cannot flag a message for a ring');
+reset role;
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000a');
+select pg_temp.check(mark_tzintuk((select max(id) from messages)) = 1, 'an admin flags a message for a ring (one member asked)');
+select pg_temp.denied($$select mark_tzintuk((select max(id) from messages))$$, 'a message is flagged once');
+reset role;
+select set_config('request.jwt.claim.sub', '', false);
+select pg_temp.check((select count(*) = 1 and (select cardinality(phones) = 1 from tzintuk_batch() limit 1) from phone_tzintuks where sent_at is null), 'the phone service takes the pending ring');
+select pg_temp.check((select count(*) = 0 from tzintuk_batch()), 'a ring is taken once');
+
 -- ===== Reset (last: wipes everything) =====
 update auth.users set encrypted_password = extensions.crypt('owner-pass', extensions.gen_salt('bf', 4)) where id = '00000000-0000-0000-0000-0000000000e0';
 select pg_temp.as_user('00000000-0000-0000-0000-0000000000e0');
