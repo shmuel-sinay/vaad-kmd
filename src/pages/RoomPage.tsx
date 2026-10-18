@@ -360,6 +360,18 @@ export default function RoomPage() {
     }
   }
 
+  async function ringForMessage(id: number) {
+    const ok = await confirm({
+      title: 'צינתוק על ההודעה',
+      body: 'יצלצל צלצול קצר לחברים שביקשו להיות מוזהרים. אפשר עד חמישה צינתוקים ביום, והצינתוק עולה יחידות בקו.',
+      confirmLabel: 'שליחת צינתוק',
+    });
+    if (!ok) return;
+    const { data, error } = await supabase.rpc('mark_tzintuk', { p_message: id });
+    if (error) return toast(errorText(error), 'error');
+    toast(`נשלח צינתוק ל-${data} חברים`);
+  }
+
   async function remove(id: number) {
     const target = byId.get(id);
     const ok = await confirm({
@@ -427,6 +439,7 @@ export default function RoomPage() {
     a.push({ icon: 'link', label: 'העתקת הקישור להודעה', onClick: () => copy(messageLink(room!.is_main ? '/' : `/room/${roomId}`, m.id), 'הקישור הועתק') });
     if (m.body) a.push({ icon: 'content_copy', label: 'העתקת הטקסט', onClick: () => copy(m.body, 'הטקסט הועתק') });
     if (item.mine && m.body && !m.flash) a.push({ icon: 'edit', label: 'עריכה', onClick: () => { setReplyTo(null); setEditing(m); composer.current?.setText(m.body); }, divider: true });
+    if (canRemove && !m.system) a.push({ icon: 'notifications', label: 'צינתוק על ההודעה', onClick: () => ringForMessage(m.id), divider: true });
     if (item.mine || canRemove) a.push({ icon: 'delete', label: 'מחיקה', onClick: () => remove(m.id), danger: true, divider: !(item.mine && m.body) });
     return a;
   }

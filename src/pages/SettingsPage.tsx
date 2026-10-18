@@ -10,6 +10,7 @@ import Icon from '../components/Icon';
 import PasswordFields, { passwordProblem } from '../components/PasswordFields';
 import EmailSettings from '../components/EmailSettings';
 import PushSettings from '../components/PushSettings';
+import PhoneSettings from '../components/PhoneSettings';
 import BirthdaySettings from '../components/BirthdaySettings';
 
 export default function SettingsPage() {
@@ -134,6 +135,8 @@ export default function SettingsPage() {
         </section>
 
         <PushSettings />
+
+        <PhoneSettings />
 
         <EmailSettings />
 
