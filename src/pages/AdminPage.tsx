@@ -23,6 +23,7 @@ import MemberKeysAdmin from '../components/MemberKeys';
 import ClaudeKeyAdmin from '../components/ClaudeKeyAdmin';
 import AiPromptsAdmin from '../components/AiPromptsAdmin';
 import ModerationPage from './ModerationPage';
+import { WaitingChatDialog } from '../components/WaitingChat';
 
 type Tab = 'members' | 'preapproved' | 'anonymous' | 'rooms' | 'media' | 'owner' | 'feedback' | 'stats' | 'guest' | 'ai' | 'sender' | 'moderation' | 'prompts' | 'side';
 type ProfilePatch = Partial<Pick<Profile, 'status' | 'role' | 'accept_anonymous' | 'can_send_anonymous' | 'join_seen'>>;
@@ -39,6 +40,7 @@ export default function AdminPage() {
   useEffect(() => {
     if (paramTab) setTab(paramTab);
   }, [paramTab]);
+  const [talkTo, setTalkTo] = useState<Profile | null>(null);
   const [filter, setFilter] = useState('');
   const [editRoom, setEditRoom] = useState<Room | null>(null);
   const [newRoom, setNewRoom] = useState(false);
@@ -267,6 +269,7 @@ export default function AdminPage() {
                         <div className="list-sub">{p.removed_at ? `הוסר מהקבוצה ${timeAgo(p.removed_at)} · אישור יחזיר אותו` : `נרשם ${timeAgo(p.created_at)}`}</div>
                       </div>
                       <div className="row gap">
+                        <button className="btn text" onClick={() => setTalkTo(p)}><Icon name="mail" size={16} /> הודעה</button>
                         <button className="btn text danger" onClick={() => updateOne(p, { status: 'banned' })}>דחייה</button>
                         <button className="btn filled small" onClick={() => updateOne(p, { status: 'active' })}>אישור</button>
                       </div>
@@ -425,6 +428,7 @@ export default function AdminPage() {
         </div>
         </div>
       </div>
+      {talkTo && <WaitingChatDialog userId={talkTo.id} name={talkTo.display_name} onClose={() => setTalkTo(null)} />}
       {editRoom && <RoomDialog room={editRoom} onClose={() => setEditRoom(null)} />}
       {newRoom && <RoomDialog onClose={() => setNewRoom(false)} />}
     </div>

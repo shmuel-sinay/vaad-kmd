@@ -412,6 +412,9 @@ create table if not exists feedback (
   created_at  timestamptz not null default now()
 );
 create index if not exists feedback_author_idx on feedback (author_id, id desc);
+-- 'system': a conversation an admin opens with someone still waiting for approval (the first message, body, is the admin's).
+alter table feedback drop constraint if exists feedback_kind_check;
+alter table feedback add constraint feedback_kind_check check (kind in ('bug', 'idea', 'other', 'system'));
 -- A request is a small conversation between the member and the management.
 create table if not exists feedback_messages (
   id           bigint generated always as identity primary key,
@@ -1204,7 +1207,8 @@ declare
   r record;
 begin
   select * into f from feedback where id = p_feedback;
-  if not found or not is_active() or not (f.author_id = auth.uid() or is_admin()) then
+  -- Someone still waiting for approval may answer a conversation the management opened with him.
+  if not found or not (is_active() and (f.author_id = auth.uid() or is_admin()) or f.kind = 'system' and f.author_id = auth.uid() and is_waiting()) then
     raise exception 'אין הרשאה' using errcode = '42501';
   end if;
   if char_length(trim(coalesce(p_body, ''))) = 0 then raise exception 'ההודעה ריקה'; end if;
@@ -1229,6 +1233,58 @@ begin
 end $$;
 
 -- Admins: how many requests are waiting (sidebar badge).
+create table if not exists waiting_mail (
+  id          bigint generated always as identity primary key,
+  user_id     uuid not null references profiles on delete cascade,
+  body        text not null,
+  created_at  timestamptz not null default now(),
+  sent_at     timestamptz
+);
+alter table waiting_mail enable row level security;
+revoke all on waiting_mail from anon, authenticated;
+
+-- Signed up and waiting for approval (not banned).
+create or replace function is_waiting() returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from profiles where id = auth.uid() and status = 'pending');
+$$;
+
+-- Admin: write to someone still waiting for approval, without approving him. Continues his open conversation if there is one.
+create or replace function message_waiting(p_user uuid, p_body text) returns bigint
+language plpgsql security definer set search_path = public as $$
+declare fid bigint; b text := left(trim(coalesce(p_body, '')), 2000);
+begin
+  if not is_admin() then raise exception 'אין הרשאה' using errcode = '42501'; end if;
+  if b = '' then raise exception 'ההודעה ריקה'; end if;
+  if not exists (select 1 from profiles where id = p_user and status = 'pending') then
+    raise exception 'אפשר לכתוב כך רק למי שממתין לאישור';
+  end if;
+  select id into fid from feedback where author_id = p_user and kind = 'system' order by id desc limit 1;
+  if fid is null then
+    insert into feedback (author_id, kind, body, status, replied_by) values (p_user, 'system', b, 'done', auth.uid()) returning id into fid;
+  else
+    insert into feedback_messages (feedback_id, author_id, from_admin, body) values (fid, auth.uid(), true, b);
+    update feedback set status = 'done' where id = fid;
+  end if;
+  -- Mailed right away to the address he signed up with (the regular email queue is for active members only).
+  insert into waiting_mail (user_id, body) values (p_user, b);
+  if to_regproc('net.http_post') is not null then
+    execute $k$select net.http_post(url := 'https://aircrgkljjnomoemnetq.supabase.co/functions/v1/send-emails',
+                                     headers := '{"Content-Type": "application/json"}'::jsonb, body := '{}'::jsonb)$k$;
+  end if;
+  return fid;
+end $$;
+
+-- For the Edge Function send-emails (service role): mails to people waiting for approval; marks them sent.
+create or replace function waiting_mail_batch()
+returns table (id bigint, email text, name text, body text)
+language sql security definer set search_path = public, auth as $$
+  update waiting_mail w set sent_at = now()
+    from profiles p, auth.users au
+   where p.id = w.user_id and au.id = w.user_id and w.sent_at is null and au.email is not null
+  returning w.id, au.email::text, p.display_name, w.body;
+$$;
+
 create or replace function open_feedback_count() returns int
 language sql stable security definer set search_path = public as $$
   select case when is_admin() then (select count(*)::int from feedback where status = 'open') else 0 end;
@@ -2200,7 +2256,7 @@ begin
   truncate feedback_messages, message_reports, mute_log, scheduled_messages, room_mutes, push_queue, push_subscriptions, push_prefs,
     quiz_guesses, quote_quizzes, confession_comments, confession_reactions, confessions, events, email_queue, email_prefs, nickname_votes, nicknames, birthday_posts, birthdays, feedback, poll_votes, poll_options, polls, dm_reactions, dm_messages, dm_participants, dm_conversations, reactions, message_likes, stars,
     anon_authors, wall_posts, channel_reads, messages, channels, preapproved_emails, roster restart identity cascade;
-  foreach t in array array['thread_likes', 'thread_reads', 'threads', 'side_messages', 'side_chat_people', 'side_chats'] loop
+  foreach t in array array['thread_likes', 'thread_reads', 'threads', 'side_messages', 'side_chat_people', 'side_chats', 'waiting_mail'] loop
     if to_regclass('public.' || t) is not null then execute format('truncate %I cascade', t); end if;
   end loop;
   delete from auth.users where id is not null;  -- Supabase rejects a DELETE without WHERE
@@ -2454,8 +2510,14 @@ revoke execute on function create_poll(text, text[], boolean, bigint), vote_poll
   set_poll_closed(bigint, boolean) from anon, public;
 grant execute on function create_poll(text, text[], boolean, bigint), vote_poll(bigint, bigint[]), poll_results(bigint),
   set_poll_closed(bigint, boolean) to authenticated;
-revoke execute on function send_feedback(text, text), reply_feedback(bigint, text, boolean), open_feedback_count(), feedback_post(bigint, text) from anon, public;
-grant execute on function send_feedback(text, text), reply_feedback(bigint, text, boolean), open_feedback_count(), feedback_post(bigint, text) to authenticated;
+revoke execute on function send_feedback(text, text), reply_feedback(bigint, text, boolean), open_feedback_count(), feedback_post(bigint, text), message_waiting(uuid, text) from anon, public;
+grant execute on function send_feedback(text, text), reply_feedback(bigint, text, boolean), open_feedback_count(), feedback_post(bigint, text), message_waiting(uuid, text) to authenticated;
+revoke execute on function waiting_mail_batch() from anon, public, authenticated;
+do $$ begin
+  if exists (select 1 from pg_roles where rolname = 'service_role') then
+    grant execute on function waiting_mail_batch() to service_role;
+  end if;
+end $$;
 revoke execute on function post_birthdays(), profile_birthday(uuid), propose_nickname(uuid, text),
   toggle_nickname_vote(bigint), remove_nickname(bigint), nickname_list(uuid) from anon, public;
 grant execute on function post_birthdays(), profile_birthday(uuid), propose_nickname(uuid, text),
@@ -3279,10 +3341,13 @@ create policy poll_votes_own on poll_votes for select using (user_id = auth.uid(
 
 -- contact requests: the sender reads his own, admins read and delete all; written only through the functions
 drop policy if exists feedback_select on feedback;
-create policy feedback_select on feedback for select using (is_active() and (author_id = auth.uid() or is_admin()));
+create policy feedback_select on feedback for select using (
+  is_active() and (author_id = auth.uid() or is_admin()) or kind = 'system' and author_id = auth.uid() and is_waiting()
+);
 drop policy if exists feedback_messages_select on feedback_messages;
 create policy feedback_messages_select on feedback_messages for select using (
   is_active() and exists (select 1 from feedback f where f.id = feedback_id and (f.author_id = auth.uid() or is_admin()))
+  or is_waiting() and exists (select 1 from feedback f where f.id = feedback_id and f.kind = 'system' and f.author_id = auth.uid())
 );
 drop policy if exists feedback_delete on feedback;
 create policy feedback_delete on feedback for delete using (is_admin());

@@ -44,7 +44,10 @@ export default function FeedbackThread({ f, adminView, onChange }: { f: Feedback
 
   // The first message is the request itself; an answer from before conversations existed shows as the management's.
   const all: Msg[] = [
-    { id: -1, author_id: f.author_id, from_admin: false, body: f.body, created_at: f.created_at },
+    // A 'system' conversation was opened by the management, so its first message is theirs.
+    f.kind === 'system'
+      ? { id: -1, author_id: null, from_admin: true, body: f.body, created_at: f.created_at }
+      : { id: -1, author_id: f.author_id, from_admin: false, body: f.body, created_at: f.created_at },
     ...(f.reply && f.replied_at ? [{ id: -2, author_id: null, from_admin: true, body: f.reply, created_at: f.replied_at }] : []),
     ...msgs,
   ];
@@ -66,7 +69,7 @@ export default function FeedbackThread({ f, adminView, onChange }: { f: Feedback
           rows={1}
           maxLength={2000}
           value={text}
-          placeholder={adminView ? 'תשובה לפונה…' : 'להוסיף לפנייה…'}
+          placeholder={adminView ? 'תשובה לפונה…' : f.kind === 'system' ? 'תשובה לניהול…' : 'להוסיף לפנייה…'}
           onChange={(e) => {
             setText(e.target.value);
             // grow with the text, up to about 6 lines

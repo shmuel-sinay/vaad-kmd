@@ -1498,3 +1498,7 @@ button.author:hover, .title-link:hover { text-decoration: underline; }
 .side-create textarea, .form-stack > textarea { width: 100%; border: 1px solid var(--outline); border-radius: 12px; padding: 8px 12px; font: inherit; background: var(--surface); color: var(--text); }
 .side-people-title { font-size: 15px; font-weight: 500; margin: 18px 0 6px; }
 .side-create ~ .list .list-sub { white-space: normal; }
+
+/* Waiting screen: messages from the management to someone not approved yet. */
+.waiting-inbox { display: grid; gap: 8px; margin: 12px 0 4px; padding: 12px; border-radius: 14px; background: var(--surface-2); text-align: start; }
+.waiting-inbox > strong { font-size: 14px; }

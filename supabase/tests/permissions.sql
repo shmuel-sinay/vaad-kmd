@@ -1023,6 +1023,35 @@ select pg_temp.check((select count(*) = 0 from side_chat_info('old')), 'an expir
 reset role;
 select pg_temp.check((select count(*) = 0 from side_chats where token = 'old'), 'expired chats are deleted');
 
+-- A conversation with someone still waiting for approval (and an email to the address he signed up with).
+insert into auth.users (id, email, raw_user_meta_data) values ('00000000-0000-0000-0000-00000000a0a1', 'waiting@x.com', '{"display_name":"ממתין"}');
+select set_config('request.jwt.claim.sub', '', false);
+update profiles set status = 'pending' where id = '00000000-0000-0000-0000-00000000a0a1';  -- whatever the sign-up rules decided by now
+select pg_temp.check((select status = 'pending' from profiles where id = '00000000-0000-0000-0000-00000000a0a1'), 'the sign-up waits for approval');
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000d');
+select pg_temp.denied($$select message_waiting('00000000-0000-0000-0000-00000000a0a1', 'שלום')$$, 'a member cannot write to someone waiting');
+reset role;
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000a');
+select pg_temp.denied($$select message_waiting('00000000-0000-0000-0000-00000000000d', 'שלום')$$, 'only someone waiting gets a system conversation');
+select message_waiting('00000000-0000-0000-0000-00000000a0a1', 'שלום, מי אתה?');
+select pg_temp.denied($$select waiting_mail_batch()$$, 'admins cannot take the waiting mails');
+reset role;
+select pg_temp.check((select count(*) = 1 from waiting_mail where user_id = '00000000-0000-0000-0000-00000000a0a1' and sent_at is null), 'an email to the waiting person is queued');
+select pg_temp.as_user('00000000-0000-0000-0000-00000000a0a1');
+select pg_temp.check((select count(*) = 1 from feedback where kind = 'system'), 'the waiting person sees the message from the management');
+select feedback_post((select id from feedback where kind = 'system'), 'אני חבר של יוסי');
+select pg_temp.check((select count(*) = 1 from feedback_messages fm join feedback f on f.id = fm.feedback_id where f.kind = 'system'), 'the waiting person answers');
+select pg_temp.check((select count(*) = 0 from messages) and (select count(*) = 0 from channels), 'the waiting person still sees nothing of the chat');
+select pg_temp.denied($$select send_feedback('other', 'פנייה')$$, 'the waiting person cannot open new requests');
+select pg_temp.denied($$select * from waiting_mail$$, 'the waiting person cannot read the mail queue');
+reset role;
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000d');
+select pg_temp.check((select count(*) = 0 from feedback where kind = 'system'), 'other members do not see the conversation');
+reset role;
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000a');
+select pg_temp.check((select status = 'open' from feedback where kind = 'system') and open_feedback_count() >= 1, 'the admin sees the answer as an open request');
+reset role;
+
 -- Maintenance mode: everyone can read the flag, only the owner switches it.
 select pg_temp.as_user('00000000-0000-0000-0000-00000000000a');
 select pg_temp.denied($$select set_maintenance(true)$$, 'a regular admin cannot switch maintenance mode');

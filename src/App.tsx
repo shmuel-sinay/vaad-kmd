@@ -22,6 +22,7 @@ import GuestPage from './pages/GuestPage';
 import BotPage from './pages/BotPage';
 import SideChatPage from './pages/SideChatPage';
 import MaintenancePage from './pages/MaintenancePage';
+import { WaitingInbox } from './components/WaitingChat';
 
 export default function App() {
   const { session, loading, me, isAdmin, isOwner, recovering, schemaOutdated, isGuest } = useApp();
@@ -81,6 +82,7 @@ export default function App() {
               ? 'מנהלי הקהילה הסירו אותך מהקבוצה. זו לא חסימה: החשבון שלך נשמר, ואם מנהל יאשר אותך שוב, הדף ייפתח אוטומטית.'
               : `שלום ${me?.display_name ?? ''}, בקשת ההצטרפות התקבלה. השם או המייל שלך לא נמצאו ברשימות המאושרות, ולכן מנהל יבדוק את הבקשה. אם היא תאושר, הדף ייפתח אוטומטית.`}
           </p>
+          {me && me.status === 'pending' && <WaitingInbox userId={me.id} />}
           <div className="auth-actions">
             <span />
             <button className="btn outlined" onClick={() => supabase.auth.signOut()}>התנתקות</button>

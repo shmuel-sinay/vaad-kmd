@@ -6,8 +6,9 @@ import { useFeedback } from '../components/Feedback';
 import Icon from '../components/Icon';
 import FeedbackThread from '../components/FeedbackThread';
 
-export type FeedbackKind = 'bug' | 'idea' | 'other';
-export const KIND_LABEL: Record<FeedbackKind, string> = { bug: 'באג / תקלה', idea: 'הצעה לשיפור', other: 'אחר' };
+export type FeedbackKind = 'bug' | 'idea' | 'other' | 'system';
+export const KIND_LABEL: Record<FeedbackKind, string> = { bug: 'באג / תקלה', idea: 'הצעה לשיפור', other: 'אחר', system: 'שיחה מהניהול' };
+const PICKABLE: FeedbackKind[] = ['bug', 'idea', 'other'];
 
 export interface FeedbackRow {
   id: number;
@@ -62,7 +63,7 @@ export default function ContactPage() {
         </header>
         <form className="settings-card form-stack" onSubmit={submit}>
           <div className="chip-row" role="radiogroup">
-            {(Object.keys(KIND_LABEL) as FeedbackKind[]).map((k) => (
+            {PICKABLE.map((k) => (
               <button type="button" key={k} role="radio" aria-checked={kind === k} className={`chip ${kind === k ? 'on' : ''}`} onClick={() => setKind(k)}>
                 <Icon name={k === 'bug' ? 'error' : k === 'idea' ? 'star' : 'mail'} size={16} /> {KIND_LABEL[k]}
               </button>
