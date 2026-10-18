@@ -1269,7 +1269,7 @@ begin
   -- Mailed right away to the address he signed up with (the regular email queue is for active members only).
   insert into waiting_mail (user_id, body) values (p_user, b);
   if to_regproc('net.http_post') is not null then
-    execute $k$select net.http_post(url := 'https://aircrgkljjnomoemnetq.supabase.co/functions/v1/send-emails',
+    execute $k$select net.http_post(url := 'https://onlefrwepwnfowqduimh.supabase.co/functions/v1/send-emails',
                                      headers := '{"Content-Type": "application/json"}'::jsonb, body := '{}'::jsonb)$k$;
   end if;
   return fid;
@@ -1800,7 +1800,7 @@ language plpgsql security definer set search_path = public as $$
 begin
   if to_regproc('net.http_post') is null then return; end if;
   if not exists (select 1 from push_queue where sent_at is null) then return; end if;
-  execute $k$select net.http_post(url := 'https://aircrgkljjnomoemnetq.supabase.co/functions/v1/send-push',
+  execute $k$select net.http_post(url := 'https://onlefrwepwnfowqduimh.supabase.co/functions/v1/send-push',
                                    headers := '{"Content-Type": "application/json"}'::jsonb, body := '{}'::jsonb)$k$;
 end $$;
 

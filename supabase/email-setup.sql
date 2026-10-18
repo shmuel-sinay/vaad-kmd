@@ -12,7 +12,7 @@ select cron.schedule(
   'send-emails',
   '*/5 * * * *',
   $$ select net.http_post(
-       url := 'https://aircrgkljjnomoemnetq.supabase.co/functions/v1/send-emails',
+       url := 'https://onlefrwepwnfowqduimh.supabase.co/functions/v1/send-emails',
        headers := '{"Content-Type": "application/json"}'::jsonb,
        body := '{}'::jsonb
      ) $$
@@ -25,7 +25,7 @@ select cron.schedule(
   'send-push',
   '* * * * *',
   $$ select net.http_post(
-       url := 'https://aircrgkljjnomoemnetq.supabase.co/functions/v1/send-push',
+       url := 'https://onlefrwepwnfowqduimh.supabase.co/functions/v1/send-push',
        headers := '{"Content-Type": "application/json"}'::jsonb,
        body := '{}'::jsonb
      ) $$
