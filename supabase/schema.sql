@@ -571,7 +571,7 @@ begin
   if not exists (select 1 from channels where is_main) then
     update channels set is_main = true, name = 'הצ''אט הראשי', admin_only_post = false,
                         description = coalesce(description, 'השיחה של כל הקהילה')
-     where id = (select id from channels order by (name = 'כללי') desc, admin_only_post, position, id limit 1);
+     where id = (select id from channels where purpose is null order by (name = 'כללי') desc, admin_only_post, position, id limit 1);
     if not found then
       insert into channels (name, description, is_main) values ('הצ''אט הראשי', 'השיחה של כל הקהילה', true);
     end if;

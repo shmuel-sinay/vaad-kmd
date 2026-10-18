@@ -1506,3 +1506,17 @@ button.author:hover, .title-link:hover { text-decoration: underline; }
 /* Voice message recorded on the phone line */
 .b-audio { display: flex; align-items: center; gap: 8px; padding: 4px 2px; color: var(--on-surface-variant, inherit); }
 .b-audio audio { height: 36px; max-width: 260px; }
+
+/* =====================================================================
+   v6: message actions sit beside the bubble (desktop, mouse), compact, no quick-emoji row.
+   Reactions are one click away in the picker; phones keep the bar above the selected message.
+   ===================================================================== */
+@media (hover: hover) and (min-width: 901px) {
+  .b-toolbar { top: 50%; bottom: auto !important; transform: translateY(-50%); height: 30px; padding: 0 2px; border-radius: 15px; box-shadow: 0 1px 2px rgba(60, 64, 67, 0.25); }
+  .b-row.theirs .b-toolbar { right: calc(100% + 6px); left: auto; top: 50%; }
+  .b-row.mine .b-toolbar { left: calc(100% + 6px); right: auto; top: 50%; }
+  .b-toolbar .b-quick { display: none; }
+  .b-toolbar .like-btn { width: 28px; height: 28px; }
+  .b-toolbar .icon-btn.small { width: 28px; height: 28px; }
+  .b-toolbar .like-btn + .b-quick, .b-toolbar .b-tools { border-inline-start: 0; margin-inline-start: 0; padding-inline-start: 0; }
+}

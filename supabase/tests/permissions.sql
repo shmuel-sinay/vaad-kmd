@@ -38,6 +38,7 @@ end $$;
 set client_min_messages = notice;
 
 select pg_temp.check((select count(*) = 1 from channels where is_main), 'fresh install has exactly one main room');
+select pg_temp.check((select count(*) = 1 from channels where is_main and purpose is null) and (select count(*) = 1 from channels where purpose = 'blessings' and not is_main), 'fresh install keeps the blessings room apart from the main room');
 
 -- ===== Membership =====
 select pg_temp.check((select role = 'admin' and status = 'active' from profiles where id = '00000000-0000-0000-0000-00000000000a'), 'first user is active admin');
