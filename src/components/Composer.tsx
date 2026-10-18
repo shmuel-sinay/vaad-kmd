@@ -1,4 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from 'react';
+import BlackCatDialog from './BlackCatDialog';
 import { uploadAttachment } from '../lib/media';
 import type { Attachment } from '../types';
 import EmojiPicker from './EmojiPicker';
@@ -48,6 +49,7 @@ const Composer = forwardRef<ComposerHandle, Props>(function Composer(
   const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
   const [pick, setPick] = useState(0);
   const [pending, setPending] = useState<Pending | null>(null);
+  const [catOpen, setCatOpen] = useState(false);
   const [emojiAt, setEmojiAt] = useState<{ x: number; y: number } | null>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -245,6 +247,9 @@ const Composer = forwardRef<ComposerHandle, Props>(function Composer(
               <button type="button" className="anon-toggle" onClick={() => fileInput.current?.click()} title="צירוף תמונה או סרטון" aria-label="צירוף תמונה או סרטון" disabled={!!pending}>
                 <Icon name="add_photo_alternate" size={20} />
               </button>
+              <button type="button" className="anon-toggle" onClick={() => setCatOpen(true)} title="סרטון מהחתול השחור" aria-label="סרטון מהחתול השחור">
+                <Icon name="videocam" size={20} />
+              </button>
               <input
                 ref={fileInput}
                 type="file"
@@ -300,6 +305,7 @@ const Composer = forwardRef<ComposerHandle, Props>(function Composer(
       {emojiAt && <EmojiPicker anchor={emojiAt} onClose={() => setEmojiAt(null)} onPick={(e) => { setEmojiAt(null); insertEmoji(e); }} />}
       {pending && <div className="upload-note">לפי התקנון: מעלים רק תכנים התואמים את מדיניות נטפרי.</div>}
       {anonymous && <div className="anon-hint">ההודעה תופיע בשם "אנונימי" והחברים לא יראו מי שלח. <b>לפי כתב ההסכמה, למנהל הצ'אט יש את היכולת והרשות המלאה לבדוק מי כתב כל הודעה.</b></div>}
+      {catOpen && <BlackCatDialog onSend={(t) => onSend(t, { anonymous: false, attachment: null })} onClose={() => setCatOpen(false)} />}
     </div>
   );
 });
