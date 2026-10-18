@@ -2256,7 +2256,7 @@ begin
   truncate feedback_messages, message_reports, mute_log, scheduled_messages, room_mutes, push_queue, push_subscriptions, push_prefs,
     quiz_guesses, quote_quizzes, confession_comments, confession_reactions, confessions, events, email_queue, email_prefs, nickname_votes, nicknames, birthday_posts, birthdays, feedback, poll_votes, poll_options, polls, dm_reactions, dm_messages, dm_participants, dm_conversations, reactions, message_likes, stars,
     anon_authors, wall_posts, channel_reads, messages, channels, preapproved_emails, roster restart identity cascade;
-  foreach t in array array['thread_likes', 'thread_reads', 'threads', 'side_messages', 'side_chat_people', 'side_chats', 'waiting_mail'] loop
+  foreach t in array array['thread_likes', 'thread_reads', 'threads', 'side_messages', 'side_chat_people', 'side_chats', 'waiting_mail', 'phone_callers'] loop
     if to_regclass('public.' || t) is not null then execute format('truncate %I cascade', t); end if;
   end loop;
   delete from auth.users where id is not null;  -- Supabase rejects a DELETE without WHERE
@@ -3469,7 +3469,7 @@ begin
   if to_regclass('storage.buckets') is null then return; end if;  -- plain Postgres (tests)
   insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
   values ('media', 'media', false, 20971520,
-          array['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4', 'video/webm', 'video/quicktime'])
+          array['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4', 'video/webm', 'video/quicktime', 'audio/wav', 'audio/x-wav'])
   on conflict (id) do update
     set public = false, file_size_limit = excluded.file_size_limit, allowed_mime_types = excluded.allowed_mime_types;
   execute 'drop policy if exists media_read on storage.objects';
@@ -3775,6 +3775,54 @@ revoke execute on function side_chat_info(text, text), side_chat_join(text, text
   side_chat_messages(text, text, bigint), side_chat_image(text, text, bigint), side_chat_send(text, text, text, text) from public;
 grant execute on function side_chat_info(text, text), side_chat_join(text, text, text, text), side_chat_rename(text, text, text),
   side_chat_messages(text, text, bigint), side_chat_image(text, text, bigint), side_chat_send(text, text, text, text) to anon, authenticated;
+
+-- ---------- Phone line (ימות המשיח) ----------
+-- The Edge Function "ivr" serves the phone line: it reads the main room aloud and turns a recording made on
+-- the phone into a voice message there (attachment type 'audio', author unknown, so it shows as "מהטלפון").
+-- The caller's number is kept apart, readable only by the owner, like an anonymous author.
+create table if not exists phone_callers (
+  message_id bigint primary key references messages on delete cascade,
+  phone      text not null,
+  created_at timestamptz not null default now()
+);
+alter table phone_callers enable row level security;
+drop policy if exists phone_callers_owner on phone_callers;
+create policy phone_callers_owner on phone_callers for select to authenticated using (is_owner());
+revoke all on phone_callers from anon, authenticated;
+grant select on phone_callers to authenticated;
+
+-- p_file: the recording's name on the phone system (digits); p_path: the copy in the media bucket (null if it
+-- couldn't be copied: it can still be heard on the phone). Each recording is posted once; at most 30 an hour.
+create or replace function ivr_post(p_file text, p_path text, p_seconds int, p_phone text)
+returns bigint
+language plpgsql security definer set search_path = public as $$
+declare
+  ch bigint;
+  mid bigint;
+begin
+  if coalesce(p_file, '') !~ '^[0-9]{6,20}$' then raise exception 'שם הקלטה לא תקין'; end if;
+  if p_path is not null and p_path !~ '^m/[0-9a-f-]{36}\.wav$' then raise exception 'קובץ לא תקין'; end if;
+  if exists (select 1 from messages where attachment ->> 'yemot' = p_file) then return null; end if;
+  if (select count(*) from phone_callers where created_at > now() - interval '1 hour') >= 30 then
+    raise exception 'יותר מדי הקלטות בשעה האחרונה';
+  end if;
+  select id into ch from channels where is_main;
+  if ch is null then raise exception 'אין צ''אט ראשי'; end if;
+  insert into messages (channel_id, author_id, anonymous, body, attachment)
+  values (ch, null, true, '',
+          jsonb_strip_nulls(jsonb_build_object('type', 'audio', 'path', p_path, 'yemot', p_file, 'phone', true,
+                                               'duration', greatest(0, least(coalesce(p_seconds, 0), 600)))))
+  returning id into mid;
+  insert into phone_callers (message_id, phone) values (mid, left(coalesce(nullif(trim(p_phone), ''), 'חסוי'), 20));
+  return mid;
+end $$;
+
+revoke execute on function ivr_post(text, text, int, text) from public, anon, authenticated;
+do $$ begin
+  if exists (select 1 from pg_roles where rolname = 'service_role') then
+    grant execute on function ivr_post(text, text, int, text) to service_role;
+  end if;
+end $$;
 
 -- ---------- Refresh the API ----------
 -- Tell the Supabase REST API (PostgREST) to reload its schema cache now, so new functions are

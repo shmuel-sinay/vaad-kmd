@@ -370,7 +370,7 @@ export default function RoomPage() {
     });
     if (!ok) return;
     const { error } = await supabase.from('messages').update({ deleted: true }).eq('id', id);
-    if (!error && canRemove && target?.attachment) removeFile(target.attachment.path);
+    if (!error && canRemove && target?.attachment?.path) removeFile(target.attachment.path);
     if (error) toast(errorText(error), 'error');
     else setMessages((prev) => prev?.map((x) => (x.id === id ? { ...x, deleted: true, body: '', attachment: null } : x)) ?? prev);
   }

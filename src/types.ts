@@ -38,10 +38,13 @@ export interface Room {
   last_anonymous: boolean | null;
 }
 
-/** A photo or short video stored in the private "media" bucket. */
+/** A photo or short video stored in the private "media" bucket, or a voice message recorded on the phone line. */
 export interface Attachment {
-  type: 'image' | 'video';
+  type: 'image' | 'video' | 'audio';
   path: string;
+  /** Phone recordings: the file's name on the phone system, and the flag that it came from the phone. */
+  yemot?: string;
+  phone?: boolean;
   width?: number;
   height?: number;
   size?: number;

@@ -1067,6 +1067,22 @@ select set_maintenance(false);
 reset role;
 select pg_temp.check(not site_maintenance(), 'the owner turns maintenance off');
 
+-- Phone line: only the Edge Function posts recordings; only the owner sees the caller's number.
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000a');
+select pg_temp.denied($$select ivr_post('1730000000123', null, 5, '0501234567')$$, 'members cannot post phone recordings directly');
+reset role;
+select pg_temp.check(ivr_post('1730000000123', null, 5, '0501234567') is not null, 'the phone line posts a recording');
+select pg_temp.check(ivr_post('1730000000123', null, 5, '0501234567') is null, 'the same recording is posted only once');
+select pg_temp.check((select anonymous and author_id is null and attachment ->> 'type' = 'audio' and channel_id = (select id from channels where is_main)
+  from messages where attachment ->> 'yemot' = '1730000000123'), 'a phone recording is an authorless voice message in the main room');
+select pg_temp.denied($$select ivr_post('../etc', null, 5, '1')$$, 'a bad recording name is refused');
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000a');
+select pg_temp.check((select count(*) = 0 from phone_callers), 'a regular admin cannot see who called');
+reset role;
+select pg_temp.as_user('00000000-0000-0000-0000-0000000000e0');
+select pg_temp.check((select count(*) = 1 from phone_callers where phone = '0501234567'), 'the owner sees who called');
+reset role;
+
 -- ===== Reset (last: wipes everything) =====
 update auth.users set encrypted_password = extensions.crypt('owner-pass', extensions.gen_salt('bf', 4)) where id = '00000000-0000-0000-0000-0000000000e0';
 select pg_temp.as_user('00000000-0000-0000-0000-0000000000e0');

@@ -251,6 +251,7 @@ function Bubble({
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const names = useMemo(() => [...profiles.values()].filter((p) => p.status === 'active').map((p) => p.display_name), [profiles]);
   const isAnon = m.anonymous || !m.authorId;
+  const fromPhone = !!m.attachment?.phone;
   const author = m.authorId ? profiles.get(m.authorId) : undefined;
   const mentionsMe = !!me && !m.mine && m.body.includes(`@${me.display_name}`);
   const showHead = !grouped && !m.mine && props.showNames;
@@ -308,7 +309,7 @@ function Bubble({
           <div className="b-head">
             {isAnon ? (
               <span className="anon-author">
-                אנונימי{m.mine && <span className="you-tag">שלך</span>}
+                {fromPhone ? 'מהטלפון' : 'אנונימי'}{m.mine && <span className="you-tag">שלך</span>}
                 {m.revealedAuthor && <span className="revealed-tag" title="גלוי רק למנהל-העל">{m.revealedAuthor}</span>}
               </span>
             ) : props.readOnly ? (
@@ -330,7 +331,7 @@ function Bubble({
                 <Icon name="format_quote" size={16} />
                 <div>
                   {m.quote.name && <strong>{m.quote.name}</strong>}
-                  <span>{m.quote.media && !m.quote.text ? 'תמונה / סרטון' : m.quote.text}</span>
+                  <span>{m.quote.media && !m.quote.text ? 'קובץ מצורף' : m.quote.text}</span>
                 </div>
               </div>
             )}
@@ -447,6 +448,15 @@ function Bubble({
 function Media({ att, onOpenImage, onLoad }: { att: Attachment; onOpenImage: (url: string) => void; onLoad: () => void }) {
   const url = useSignedUrl(att.path);
   const ratio = att.width && att.height ? `${att.width} / ${att.height}` : undefined;
+  if (att.type === 'audio') {
+    return (
+      <div className="b-audio">
+        <Icon name="campaign" size={18} />
+        {!att.path ? <span className="muted small">הודעה קולית מהטלפון (נשמעת בקו הטלפוני)</span>
+          : url ? <audio src={url} controls preload="metadata" onLoadedMetadata={onLoad} /> : <div className="media-loading" />}
+      </div>
+    );
+  }
   if (att.type === 'video') {
     return (
       <div className="b-media" style={{ aspectRatio: ratio }}>
