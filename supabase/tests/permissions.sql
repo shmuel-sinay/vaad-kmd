@@ -1076,6 +1076,14 @@ select pg_temp.check(ivr_post('1730000000123', null, 5, '0501234567') is null, '
 select pg_temp.check((select anonymous and author_id is null and attachment ->> 'type' = 'audio' and channel_id = (select id from channels where is_main)
   from messages where attachment ->> 'yemot' = '1730000000123'), 'a phone recording is an authorless voice message in the main room');
 select pg_temp.denied($$select ivr_post('../etc', null, 5, '1')$$, 'a bad recording name is refused');
+select set_config('request.jwt.claim.sub', '', false);  -- the Edge Function has no member login
+select ivr_transcript((select id from messages where attachment ->> 'yemot' = '1730000000123'), 'שלום לכולם');
+select pg_temp.check((select body = 'תמלול אוטומטי: שלום לכולם' and edited_at is null from messages where attachment ->> 'yemot' = '1730000000123'), 'a transcript is added under a phone recording');
+select ivr_transcript((select id from messages where attachment ->> 'yemot' = '1730000000123'), 'אחר');
+select pg_temp.check((select body = 'תמלול אוטומטי: שלום לכולם' from messages where attachment ->> 'yemot' = '1730000000123'), 'a transcript is written only once');
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000a');
+select pg_temp.denied($$select ivr_transcript(1, 'x')$$, 'members cannot write transcripts');
+reset role;
 select pg_temp.as_user('00000000-0000-0000-0000-00000000000a');
 select pg_temp.check((select count(*) = 0 from phone_callers), 'a regular admin cannot see who called');
 reset role;

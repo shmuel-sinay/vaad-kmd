@@ -3825,10 +3825,21 @@ begin
   return mid;
 end $$;
 
-revoke execute on function ivr_post(text, text, int, text) from public, anon, authenticated;
+-- A short automatic transcript under a phone recording (Gemini, through the shared AI keys). Only once, only on
+-- an untouched phone message; not marked as edited.
+create or replace function ivr_transcript(p_message bigint, p_text text) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  if coalesce(trim(p_text), '') = '' then return; end if;
+  update messages set body = left('תמלול אוטומטי: ' || trim(p_text), 4000)
+   where id = p_message and not deleted and body = '' and (attachment ->> 'phone')::boolean;
+  update messages set edited_at = null where id = p_message;
+end $$;
+
+revoke execute on function ivr_post(text, text, int, text), ivr_transcript(bigint, text) from public, anon, authenticated;
 do $$ begin
   if exists (select 1 from pg_roles where rolname = 'service_role') then
-    grant execute on function ivr_post(text, text, int, text) to service_role;
+    grant execute on function ivr_post(text, text, int, text), ivr_transcript(bigint, text) to service_role;
   end if;
 end $$;
 

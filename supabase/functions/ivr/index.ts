@@ -2,10 +2,12 @@
 // the phone system calls it without a login. It answers in Yemot's plain-text grammar.
 //   ?mode=listen  reads the latest main-room messages aloud (phone recordings are played from the line itself:
 //                 the extension's api_dir points at the recordings folder).
-//   ?mode=record  records a message (read=...record) and posts it to the main room as a voice message.
+//   ?mode=record  records a message (read=...record) and posts it to the main room as a voice message, then adds
+//                 a short transcript under it (Gemini through the shared AI keys, when one is free).
 // Needs the secret YEMOT_TOKEN ("<system number>:<password>" or an API token) to copy recordings to the site;
 // without it a recording is still posted, but can be heard only on the phone.
-import { createClient } from 'npm:@supabase/supabase-js@2';
+import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2';
+import { encodeBase64 } from 'jsr:@std/encoding@1/base64';
 
 const REC_FOLDER = '/2'; // where the record extension saves files (= api_dir of the listen extension)
 const LISTEN_COUNT = 10;
@@ -30,6 +32,38 @@ function wavSeconds(b: Uint8Array): number {
   return byteRate ? Math.round((b.length - 44) / byteRate) : 0;
 }
 
+/** A short Hebrew transcript of a recording through the shared Gemini keys (ai_take_key); null when none is free. */
+async function transcribe(db: SupabaseClient, wav: Uint8Array): Promise<string | null> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const { data } = await db.rpc('ai_take_key', { p_user: null });
+    const k = (Array.isArray(data) ? data[0] : data) as { id: number | null; api_key: string; model: string } | null;
+    if (!k?.id) return null;
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(k.model)}:generateContent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': k.api_key },
+      body: JSON.stringify({
+        contents: [{
+          role: 'user',
+          parts: [
+            { inline_data: { mime_type: 'audio/wav', data: encodeBase64(wav) } },
+            { text: 'תמלל את ההקלטה בעברית, מילה במילה, בלי הקדמה ובלי הערות. אם אין דיבור ברור, החזר רק: (לא נשמע דיבור ברור)' },
+          ],
+        }],
+        generationConfig: { temperature: 0 },
+      }),
+    });
+    if (!r.ok) {
+      await db.rpc('ai_key_result', { p_id: k.id, p_error: `${r.status}: ${(await r.text()).slice(0, 200)}`, p_cooldown: r.status === 429 ? 65 : r.status >= 500 ? 30 : 3600 });
+      continue;
+    }
+    await db.rpc('ai_key_result', { p_id: k.id, p_error: null, p_cooldown: 0 });
+    const j = await r.json();
+    const t = (j.candidates?.[0]?.content?.parts ?? []).map((x: { text?: string }) => x.text ?? '').join('').trim();
+    return t ? t.slice(0, 1500) : null;
+  }
+  return null;
+}
+
 Deno.serve(async (req) => {
   const url = new URL(req.url);
   const p = url.searchParams;
@@ -52,6 +86,7 @@ Deno.serve(async (req) => {
     if (!file) return text("id_list_message=t-ההקלטה לא נשמרה, נסו שוב");
     let path: string | null = null;
     let seconds = 0;
+    let wav: Uint8Array | null = null;
     const token = Deno.env.get('YEMOT_TOKEN');
     if (token) {
       try {
@@ -60,6 +95,7 @@ Deno.serve(async (req) => {
         // A real recording starts with "RIFF"; an error comes back as JSON text.
         if (r.ok && bytes.length > 44 && String.fromCharCode(...bytes.slice(0, 4)) === 'RIFF') {
           seconds = wavSeconds(bytes);
+          wav = bytes;
           const name = `m/${crypto.randomUUID()}.wav`;
           const up = await db.storage.from('media').upload(name, bytes, { contentType: 'audio/wav' });
           if (!up.error) path = name;
@@ -68,8 +104,13 @@ Deno.serve(async (req) => {
         /* keep it phone-only */
       }
     }
-    const { error } = await db.rpc('ivr_post', { p_file: file, p_path: path, p_seconds: seconds, p_phone: p.get('ApiPhone') ?? '' });
+    const { data: mid, error } = await db.rpc('ivr_post', { p_file: file, p_path: path, p_seconds: seconds, p_phone: p.get('ApiPhone') ?? '' });
     if (error) return text(`id_list_message=t-${say('לא הצלחנו לשלוח את ההודעה, ' + error.message)}`);
+    // The caller doesn't wait for the transcript: it is added under the voice message a few seconds later.
+    if (mid && wav) {
+      const job = transcribe(db, wav).then((t) => t && db.rpc('ivr_transcript', { p_message: mid, p_text: t })).catch(() => {});
+      (globalThis as unknown as { EdgeRuntime?: { waitUntil(p: Promise<unknown>): void } }).EdgeRuntime?.waitUntil(job);
+    }
     return text("id_list_message=t-ההודעה נשלחה לצ'אט הראשי, תודה");
   }
 
