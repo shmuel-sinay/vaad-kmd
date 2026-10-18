@@ -1,4 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import ExternalVideo from './ExternalVideo';
+import { embedsOf } from '../lib/embeds';
 import { Link } from 'react-router-dom';
 import { useApp } from '../AppContext';
 import { clockTime, dayLabel, fullDate, roleTag } from '../lib/format';
@@ -347,6 +349,7 @@ function Bubble({
                     <RichText text={m.body} names={names} myName={me?.display_name} />
                   </div>
                 )}
+                {!m.deleted && embedsOf(m.body).map((u) => <ExternalVideo key={u} url={u} />)}
                 {m.eventLabel && (
                   <Link to="/events" className="b-event">
                     <Icon name="calendar_month" size={16} /> בלוח: {m.eventLabel}

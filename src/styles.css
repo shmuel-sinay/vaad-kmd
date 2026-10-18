@@ -1525,3 +1525,10 @@ button.author:hover, .title-link:hover { text-decoration: underline; }
 .nav-toggle { width: 100%; background: none; border: 0; cursor: pointer; font-family: inherit; text-align: start; color: var(--text-2); }
 .nav-toggle:hover { color: var(--text); }
 .app.collapsed .nav-toggle { display: none; }
+
+/* Video from the source site, played from there on click */
+.ext-video { display: block; margin-top: 6px; max-width: 360px; border-radius: 12px; overflow: hidden; }
+.ext-video video { display: block; width: 100%; max-height: 70vh; background: #000; }
+.ext-card { display: flex; align-items: center; gap: 10px; width: 100%; padding: 14px 16px; border: 1px solid var(--divider); background: var(--surface); color: var(--text); cursor: pointer; font: inherit; }
+.ext-card:hover { background: var(--hover); }
+.ext-failed { display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: var(--surface); font-size: 13px; color: var(--muted); }
