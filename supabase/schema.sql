@@ -3881,8 +3881,7 @@ begin
   select i.user_id into u from phone_ids i join profiles p on p.id = i.user_id
    where i.code = coalesce(p_code, '') and p.status = 'active';
   if u is null then
-    insert into phone_login_fails (phone) values (caller);
-    delete from phone_login_fails where at < now() - interval '1 day';
+    insert into phone_login_fails (phone) values (caller);  -- at most 30 an hour (the lockout), so no cleanup is needed
   end if;
   return u;
 end $$;
