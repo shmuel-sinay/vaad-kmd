@@ -4052,6 +4052,23 @@ do $$ begin
   end if;
 end $$;
 
+-- A news flash posted in the main room is read on the phone line before the menu (the root menu's "temporary
+-- message" M0001, kept as a text-to-speech file for 24 hours). The Edge Function "ivr" (?mode=flashsync) writes or
+-- removes the file; this wakes it right after a flash is posted (an hourly cron job also wakes it, to expire old ones).
+create or replace function phone_flash_kick() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if new.flash is not null and exists (select 1 from channels where id = new.channel_id and is_main)
+     and to_regproc('net.http_post') is not null then
+    execute $k$select net.http_post(url := 'https://onlefrwepwnfowqduimh.supabase.co/functions/v1/ivr?mode=flashsync',
+                                     headers := '{"Content-Type": "application/json"}'::jsonb, body := '{}'::jsonb)$k$;
+  end if;
+  return null;
+end $$;
+
+create or replace trigger messages_flash_phone after insert on messages
+  for each row execute function phone_flash_kick();
+
 -- ---------- Refresh the API ----------
 -- Tell the Supabase REST API (PostgREST) to reload its schema cache now, so new functions are
 -- available immediately instead of returning "function not found" for a while.

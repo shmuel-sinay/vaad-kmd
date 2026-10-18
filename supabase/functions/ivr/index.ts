@@ -5,6 +5,8 @@
 //   ?mode=rooms     a room that an admin gave a number (channels.phone_key): hear it.
 //   ?mode=polls     personal code, then pick a poll and vote (private, like on the site).
 //   ?mode=personal  personal code: hear private chats, record to the main room in his name, answer by voice.
+//   ?mode=flashsync the latest main-room news flash (last 24 hours) becomes the root menu's temporary message M0001.tts, or the
+//                   file is removed when none is left (called by the database after a flash and hourly).
 //   ?mode=tzintuk   rings (צינתוק) the members who asked, for a message an inspector flagged (called by the database).
 // Recordings live in the extension's folder REC_FOLDER (the api_dir of every extension below), so "f-<file>" plays them.
 // Secret YEMOT_TOKEN ("<system number>:<password>") copies recordings to the site and sends rings; without it a
@@ -21,13 +23,13 @@ const play = (...parts: string[]) => text(`id_list_message=${parts.join('.')}`);
 const t = (s: string) => `t-${say(s)}`;
 
 /** Text for Yemot TTS: dots, dashes, = and & are part of the response grammar, so they become spaces. */
-function say(s: string): string {
+function say(s: string, max = 220): string {
   return s
     .replace(/https?:\/\/\S+/g, ' קישור ')
     .replace(/[^\p{Script=Hebrew}a-zA-Z0-9\s,!?'"]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, 220);
+    .slice(0, max);
 }
 
 /** Ask for digits: name, (no reuse), max, min, seconds to wait, how to repeat it, block *, block 0. */
@@ -171,6 +173,36 @@ Deno.serve(async (req) => {
   const phone = (p.get('ApiPhone') ?? '').replace(/\D/g, '') || 'hidden';
   const { data: main } = await db.from('channels').select('id, name').eq('is_main', true).maybeSingle();
   const mainId = (main?.id as number | undefined) ?? -1;
+
+  // ---- the news flash before the menu: keep the root's M0001.tts in step with the latest main-room flash ----
+  if (mode === 'flashsync') {
+    const token = Deno.env.get('YEMOT_TOKEN');
+    if (!token) return Response.json({ status: 'no YEMOT_TOKEN' });
+    const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+    const { data: fl } = await db.from('messages').select('id, flash').eq('channel_id', mainId).eq('deleted', false)
+      .not('flash', 'is', null).gte('created_at', since).order('id', { ascending: false }).limit(1).maybeSingle();
+    const want = Number(fl?.id ?? 0);
+    const { data: done } = await db.from('phone_seen').select('last_id').eq('who', 'flash:sync').eq('channel_id', mainId).maybeSingle();
+    if (Number(done?.last_id ?? 0) === want) return Response.json({ status: 'nochange', want });
+    let result: unknown;
+    if (want) {
+      const f = fl!.flash as { title?: string; text?: string; sign?: string };
+      const spoken = `מבזק. ${say(f.title ?? '')}. ${say(f.text ?? '', 400)} ${say(f.sign ?? '')}`.replace(/\s+/g, ' ').trim().slice(0, 600);
+      const form = new FormData();
+      form.append('token', token);
+      form.append('path', 'ivr2:/M0001.tts');
+      form.append('convertAudio', 'false');
+      form.append('file', new Blob([spoken], { type: 'text/plain' }), 'M0001.tts');
+      const r = await fetch('https://www.call2all.co.il/ym/api/UploadFile', { method: 'POST', body: form });
+      result = await r.text();
+    } else {
+      const r = await fetch(`https://www.call2all.co.il/ym/api/FileAction?token=${encodeURIComponent(token)}&action=delete&what=${encodeURIComponent('ivr2:/M0001.tts')}`);
+      result = await r.text();
+    }
+    const ok = /"responseStatus"\s*:\s*"OK"/i.test(String(result)) || (!want && /not.?found|NOT_FOUND|no such/i.test(String(result)));
+    if (ok) await db.from('phone_seen').upsert({ who: 'flash:sync', channel_id: mainId, last_id: want });
+    return Response.json({ status: ok ? 'synced' : 'failed', want, result: String(result).slice(0, 300) });
+  }
 
   // ---- rings for a flagged message (called by the database; it only sends what the management asked for) ----
   if (mode === 'tzintuk') {

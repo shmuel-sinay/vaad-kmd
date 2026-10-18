@@ -1146,6 +1146,12 @@ select set_config('request.jwt.claim.sub', '', false);
 select pg_temp.check((select count(*) = 1 and (select cardinality(phones) = 1 from tzintuk_batch() limit 1) from phone_tzintuks where sent_at is null), 'the phone service takes the pending ring');
 select pg_temp.check((select count(*) = 0 from tzintuk_batch()), 'a ring is taken once');
 
+-- A flash in the main room wakes the phone line's flash sync (it only calls out when pg_net exists).
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000a');
+select send_flash((select id from channels where is_main), 'flash', 'בדיקה', 'מבזק בדיקה');
+reset role;
+select pg_temp.check(exists (select 1 from pg_trigger where tgname = 'messages_flash_phone'), 'the flash trigger for the phone line exists');
+
 -- ===== Reset (last: wipes everything) =====
 update auth.users set encrypted_password = extensions.crypt('owner-pass', extensions.gen_salt('bf', 4)) where id = '00000000-0000-0000-0000-0000000000e0';
 select pg_temp.as_user('00000000-0000-0000-0000-0000000000e0');
