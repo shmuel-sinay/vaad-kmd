@@ -1,6 +1,8 @@
 import { useState, type FormEvent } from 'react';
+import { supabase } from '../supabase';
+import { errorText } from '../lib/format';
 import { embedsOf } from '../lib/embeds';
-import { Modal } from './Feedback';
+import { Modal, useFeedback } from './Feedback';
 import ExternalVideo from './ExternalVideo';
 
 /** Share a video from "החתול השחור": explains how to copy its address, checks it, shows a preview and posts it. */
@@ -8,6 +10,26 @@ export default function BlackCatDialog({ onSend, onClose }: { onSend: (text: str
   const [url, setUrl] = useState('');
   const [caption, setCaption] = useState('');
   const [busy, setBusy] = useState(false);
+  const { toast } = useFeedback();
+  // A request to the management to support another site (it arrives in the "פניות" tab like any request).
+  const [askOpen, setAskOpen] = useState(false);
+  const [site, setSite] = useState('');
+  const [why, setWhy] = useState('');
+  const [asking, setAsking] = useState(false);
+
+  async function ask(e: FormEvent) {
+    e.preventDefault();
+    if (!site.trim()) return;
+    setAsking(true);
+    const body = `בקשה להוספת אתר להטמעת סרטונים\nהאתר: ${site.trim()}${why.trim() ? `\nהערה: ${why.trim()}` : ''}`;
+    const { error } = await supabase.rpc('send_feedback', { p_kind: 'idea', p_body: body });
+    setAsking(false);
+    if (error) return toast(errorText(error), 'error');
+    toast('הבקשה נשלחה להנהלה. התשובה תגיע ב"יצירת קשר עם הניהול"');
+    setAskOpen(false);
+    setSite('');
+    setWhy('');
+  }
   const found = embedsOf(url.trim());
   const valid = found.length === 1 && found[0] === url.trim();
 
@@ -51,6 +73,29 @@ export default function BlackCatDialog({ onSend, onClose }: { onSend: (text: str
           <button className="btn filled" disabled={busy || !valid}>שליחה לצ'אט</button>
         </div>
       </form>
+      <div className="form-stack" style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid var(--divider)' }}>
+        {!askOpen ? (
+          <p className="muted small" style={{ margin: 0 }}>
+            רוצים תמיכה גם באתרים אחרים שפתוחים בנטפרי? <button type="button" className="link-like" onClick={() => setAskOpen(true)}>בקשה להוספת אתר</button>
+          </p>
+        ) : (
+          <form className="form-stack" onSubmit={ask}>
+            <strong>בקשה להוספת אתר</strong>
+            <label className="field">
+              <span>כתובת האתר</span>
+              <input value={site} onChange={(e) => setSite(e.target.value)} dir="ltr" maxLength={200} placeholder="https://…" required />
+            </label>
+            <label className="field">
+              <span>הערה (לא חובה)</span>
+              <input value={why} onChange={(e) => setWhy(e.target.value)} maxLength={400} placeholder="למשל: סרטונים שמתפרסמים שם, ושאתר זה פתוח בנטפרי" />
+            </label>
+            <div className="dialog-actions">
+              <button type="button" className="btn text" onClick={() => setAskOpen(false)}>ביטול</button>
+              <button className="btn tonal" disabled={asking || !site.trim()}>שליחה להנהלה</button>
+            </div>
+          </form>
+        )}
+      </div>
     </Modal>
   );
 }
