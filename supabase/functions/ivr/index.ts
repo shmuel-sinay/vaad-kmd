@@ -88,5 +88,13 @@ Deno.serve(async (req) => {
     else if (m.attachment) parts.push(`t-${say(who.replace(/ כתב$/, ' שלח'))} ${m.attachment.type === 'video' ? 'סרטון' : 'תמונה'}`);
   }
   if (!parts.length) return text("id_list_message=t-אין עדיין הודעות בצ'אט הראשי");
-  return text(`id_list_message=t-ההודעות האחרונות בצ'אט הראשי, מהחדשה לישנה.${parts.join('.')}`);
+  // The explanation is heard only on a number's first call; after that the messages start right away.
+  const phone = (p.get('ApiPhone') ?? '').replace(/\D/g, '');
+  let intro = true;
+  if (phone) {
+    const { data: seen } = await db.from('phone_listeners').select('phone').eq('phone', phone).maybeSingle();
+    if (seen) intro = false;
+    else await db.from('phone_listeners').insert({ phone });
+  }
+  return text(`id_list_message=${intro ? "t-ההודעות האחרונות בצ'אט הראשי, מהחדשה לישנה." : ''}${parts.join('.')}`);
 });

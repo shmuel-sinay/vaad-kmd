@@ -1081,6 +1081,7 @@ select pg_temp.check((select count(*) = 0 from phone_callers), 'a regular admin 
 reset role;
 select pg_temp.as_user('00000000-0000-0000-0000-0000000000e0');
 select pg_temp.check((select count(*) = 1 from phone_callers where phone = '0501234567'), 'the owner sees who called');
+select pg_temp.denied($$select * from phone_listeners$$, 'nobody on the site reads the phone listeners list');
 reset role;
 
 -- ===== Reset (last: wipes everything) =====

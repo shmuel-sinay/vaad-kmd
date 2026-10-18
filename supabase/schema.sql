@@ -2256,7 +2256,7 @@ begin
   truncate feedback_messages, message_reports, mute_log, scheduled_messages, room_mutes, push_queue, push_subscriptions, push_prefs,
     quiz_guesses, quote_quizzes, confession_comments, confession_reactions, confessions, events, email_queue, email_prefs, nickname_votes, nicknames, birthday_posts, birthdays, feedback, poll_votes, poll_options, polls, dm_reactions, dm_messages, dm_participants, dm_conversations, reactions, message_likes, stars,
     anon_authors, wall_posts, channel_reads, messages, channels, preapproved_emails, roster restart identity cascade;
-  foreach t in array array['thread_likes', 'thread_reads', 'threads', 'side_messages', 'side_chat_people', 'side_chats', 'waiting_mail', 'phone_callers'] loop
+  foreach t in array array['thread_likes', 'thread_reads', 'threads', 'side_messages', 'side_chat_people', 'side_chats', 'waiting_mail', 'phone_callers', 'phone_listeners'] loop
     if to_regclass('public.' || t) is not null then execute format('truncate %I cascade', t); end if;
   end loop;
   delete from auth.users where id is not null;  -- Supabase rejects a DELETE without WHERE
@@ -3790,6 +3790,14 @@ drop policy if exists phone_callers_owner on phone_callers;
 create policy phone_callers_owner on phone_callers for select to authenticated using (is_owner());
 revoke all on phone_callers from anon, authenticated;
 grant select on phone_callers to authenticated;
+
+-- Numbers that already heard the listen extension's explanation (said on the first call only). Edge Function only.
+create table if not exists phone_listeners (
+  phone      text primary key,
+  first_at   timestamptz not null default now()
+);
+alter table phone_listeners enable row level security;
+revoke all on phone_listeners from anon, authenticated;
 
 -- p_file: the recording's name on the phone system (digits); p_path: the copy in the media bucket (null if it
 -- couldn't be copied: it can still be heard on the phone). Each recording is posted once; at most 30 an hour.
