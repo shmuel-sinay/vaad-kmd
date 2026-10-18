@@ -1,9 +1,8 @@
 import { useState } from 'react';
 import Icon from './Icon';
 
-/** A video from the source site: a card first, the player only after a click (so the chat stays light). */
+/** A video from the source site, shown in the message right away (first frame, with controls); a click plays it. */
 export default function ExternalVideo({ url }: { url: string }) {
-  const [on, setOn] = useState(false);
   const [failed, setFailed] = useState(false);
   if (failed) {
     return (
@@ -14,17 +13,10 @@ export default function ExternalVideo({ url }: { url: string }) {
       </div>
     );
   }
-  if (!on) {
-    return (
-      <button type="button" className="ext-video ext-card" onClick={() => setOn(true)}>
-        <Icon name="videocam" size={22} />
-        <span>סרטון מהחתול השחור. לחיצה לניגון</span>
-      </button>
-    );
-  }
   return (
     <div className="ext-video">
-      <video src={url} controls autoPlay playsInline preload="metadata" onError={() => setFailed(true)} />
+      {/* #t=0.1 makes phones show a frame instead of a black box before play */}
+      <video src={`${url}#t=0.1`} controls playsInline preload="metadata" onError={() => setFailed(true)} />
     </div>
   );
 }
