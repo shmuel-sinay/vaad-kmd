@@ -40,7 +40,7 @@ export default function MaintenanceAdmin() {
       </div>
       <p className="muted">
         סוגר את האתר לכולם חוץ ממך: מי שנכנס רואה רק "האתר בשלבי פיתוח", בלי שם האתר ובלי מסך התחברות. הצ'אטים הזמניים בקישור
-        ממשיכים לעבוד. אם תתנתק, נכנסים בכתובת <span dir="ltr">vaad-kmd.netlify.app/#/dev</span>.
+        ממשיכים לעבוד. אם תתנתק, נכנסים בכתובת <span dir="ltr">{`${location.host}${location.pathname}#/dev`}</span>.
       </p>
       <div className={`guest-status ${on ? 'on' : ''}`}>
         <Icon name={on ? 'lock' : 'visibility'} size={20} />
