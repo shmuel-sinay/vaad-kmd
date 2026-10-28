@@ -5,7 +5,7 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import nodemailer from 'npm:nodemailer@6';
 
-const SITE_URL = Deno.env.get('SITE_URL') ?? 'https://vaad-kmd.netlify.app/';
+const SITE_URL = Deno.env.get('SITE_URL') ?? 'https://kosher-tek.com/chat/';
 const FROM_NAME = Deno.env.get('FROM_NAME') ?? 'מערכת ועד קמ"ד ישיבת חברון';
 
 interface Item {
